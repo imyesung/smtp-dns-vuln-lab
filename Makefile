@@ -7,6 +7,9 @@ down:
 send:
 	bash scripts/sendmail.sh
 
+fetch:
+	bash scripts/fetchmail.sh
+
 logs:
 	docker logs -f mail-postfix	
 

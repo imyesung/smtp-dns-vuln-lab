@@ -1,12 +1,44 @@
+# 기본 호스트명 설정
 myhostname = mail.test.local
-myorigin = $myhostname
-mydestination = $myhostname, localhost.localdomain, localhost
-inet_interfaces = all
-inet_protocols = all
 
-smtpd_banner = $myhostname ESMTP
-smtpd_tls_security_level = none
-smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+# 수신 허용 도메인 (loop 방지 핵심)
+mydestination = $myhostname, localhost, localhost.localdomain, test.local
 
-mynetworks = 172.20.0.0/16, 127.0.0.0/8
-maillog_file = /var/log/mail.log
+# 내부 네트워크에서만 메일 전송 허용
+mynetworks = 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+
+# TLS 설정 (옵션)
+smtp_tls_security_level = may
+smtpd_tls_security_level = may
+
+# 메시지 크기 제한 해제
+message_size_limit = 0
+
+# 인증 필요 없음
+smtpd_sasl_auth_enable = no
+
+# 수신자 도메인 무시 (실험용)
+local_recipient_maps =
+
+# 큐 디렉터리 및 기본 타입 설정
+queue_directory = /var/spool/postfix
+default_database_type = lmdb
+
+# 필수 ALLOW 설정 (컨테이너 실행을 위해 필요)
+# 이건 docker-compose.yml에서 환경변수로 설정되므로 여기에는 없어도 됨
+# ALLOW_EMPTY_SENDER_DOMAINS = yes
+
+# 로깅
+syslog_name = postfix
+
+# 기본 수신 유저 (bounce 에러 회피용)
+alias_maps = lmdb:/etc/aliases
+alias_database = lmdb:/etc/aliases
+
+# 홈 디렉터리 없이 처리
+home_mailbox = Maildir/
+
+# chroot 비활성화 (pickup 문제 회피 가능)
+# (선택적, 다른 실험 시 활성화해도 됨)
+# default_transport = error
+# fallback_transport = error
