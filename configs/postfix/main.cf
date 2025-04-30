@@ -1,0 +1,12 @@
+myhostname = mail.test.local
+myorigin = $myhostname
+mydestination = $myhostname, localhost.localdomain, localhost
+inet_interfaces = all
+inet_protocols = all
+
+smtpd_banner = $myhostname ESMTP
+smtpd_tls_security_level = none
+smtpd_relay_restrictions = permit_mynetworks, reject_unauth_destination
+
+mynetworks = 172.20.0.0/16, 127.0.0.0/8
+maillog_file = /var/log/mail.log
