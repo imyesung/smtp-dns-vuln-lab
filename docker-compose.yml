@@ -15,6 +15,7 @@ services:
   dns-dnsmasq:
     image: andyshinn/dnsmasq     # DNSMasq 공식 이미지
     container_name: dns-dnsmasq
+    platform: linux/amd64
     command: ["-k"]              # 포그라운드 모드
     ports:
       - "53:53/udp"              # DNS
