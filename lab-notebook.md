@@ -21,21 +21,20 @@
 
 **Docker는 왜 필요한가? 컨테이너와 VM의 핵심 차이는 무엇인가?**
 
-- [ ] Docker 기본 아키텍처 읽기
-- [ ] `docker run hello-world` 실행하기
+- [x] Docker 기본 아키텍처 스터디
 
 ### 2. Docker 명령어 실습
 
 **Docker에서 컨테이너를 생성하고 관리하는 기본 명령어는 무엇인가?**
 
-- [ ] `docker ps, run, stop, rm, images` 명령어 실습
+- [x] `docker ps, run, stop, rm, images` 명령어 실습
 
 ### 3. Docker Compose 기본 구조
 
 **여러 컨테이너를 관리할 때 Docker Compose는 어떻게 동작하는가?**
 
 - [ ] 간단한 docker-compose.yml 구조 파악
-- [ ] `docker-compose up`, `docker-compose down` 명령어 실습
+- [x] `docker-compose up`, `docker-compose down` 명령어 실습
 
 ## Part 2: 이메일 서버 기초 심화
 
@@ -43,7 +42,7 @@
 
 **MTA, MDA, MUA는 각각 무엇이며, 어떤 역할을 하는가?**
 
-- [ ] 송신, 수신, 사용자 에이전트 흐름을 개념도와 함께 정리
+- [x] 송신, 수신, 사용자 에이전트 흐름을 개념도와 함께 정리
 
 ### 5. SMTP 프로토콜 기초
 
@@ -71,7 +70,7 @@
 
 **메일이 송신되고 수신되기까지 전체 과정은 어떻게 흐르는가?**
 
-- [ ] 송신자 → SMTP 서버 → 수신자 메일 서버 → POP3/IMAP 사용자 흐름 요약
+- [x] 송신자 → SMTP 서버 → 수신자 메일 서버 → POP3/IMAP 사용자 흐름 요약
 
 ### 9. Postfix 기본 개념 심화
 
@@ -102,15 +101,15 @@
 
 **Postfix와 DNSMasq를 연결하는 Docker Compose 파일은 어떻게 구성하는가?**
 
-- [ ] 기본 docker-compose.yml 작성
-- [ ] Docker 네트워크를 격리하기 위한 독립 bridge 네트워크 설정
+- [x] 기본 docker-compose.yml 작성
+- [x] Docker 네트워크를 격리하기 위한 독립 bridge 네트워크 설정
 - [ ] 또는 `--network none` 옵션 검토
 
 ### 13. Postfix 컨테이너 실행 및 초기 점검
 
 **Postfix 컨테이너가 정상적으로 실행되었는지 어떻게 확인하는가?**
 
-- [ ] 컨테이너 로그 점검
+- [x] 컨테이너 로그 점검
 - [ ] SMTP 포트 개방 상태 확인
 
 ### 14. DNSMasq 컨테이너 실행 및 점검
