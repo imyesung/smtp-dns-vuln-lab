@@ -7,13 +7,24 @@
 - Docker 환경을 기반으로 실험용 이메일 서버(Postfix, DNSMasq 등)를 구축한다.
 - 이메일 서버 작동 원리를 SMTP, POP3, IMAP 수준까지 기초부터 정확히 이해한다.
 - 구조적 취약점을 직접 실험하고, 공격 시나리오를 구성하며, 대응 방법까지 탐구한다.
-- 최종적으로 '가상화 환경에서 실험 및 분석 완료' 보고서를 작성할 수 있도록 한다.
+- 실험 과정과 결과를 종합하여 '이메일 서버 취약점 분석 보고서'를 작성하는 것을 최종 목표로 한다.
 
 ### 기본 전제
 
-- 현재 이메일 서버에 대한 지식은 전무한 상태이다.
+- 이메일 서버 시스템에 대한 이해가 없는 초보자 관점에서 실험을 진행한다.
 - 실험은 로컬 Docker 네트워크 내에서만 이루어진다.
 - 외부 인터넷과 격리된 환경에서 모든 테스트를 수행한다.
+
+### 현재 실험 환경
+- **mail-postfix**: 메일 서버
+- **dns-dnsmasq**: DNS 서버
+- **mua-alpine**: 클라이언트 테스트용
+
+**데모 흐름 최적화**:
+  - mail-postfix 컨테이너에서 취약 설정 → 패치 → 재검증 흐름 구현
+  - mua-alpine 컨테이너에서 공격 시뮬레이션
+  - 결과 비교 및 HTML 리포트 자동 생성
+
 
 ## Part 1: Docker 기초 압축
 
@@ -33,7 +44,7 @@
 
 **여러 컨테이너를 관리할 때 Docker Compose는 어떻게 동작하는가?**
 
-- [ ] 간단한 docker-compose.yml 구조 파악
+- [x] 간단한 docker-compose.yml 구조 파악
 - [x] `docker-compose up`, `docker-compose down` 명령어 실습
 
 ## Part 2: 이메일 서버 기초 심화
@@ -97,136 +108,155 @@
 
 ## Part 3: 실험 환경 구축
 
-### 12. Docker Compose로 이메일 서버 환경 구축
+### 12. 현재 컨테이너 구성 파악 및 최적화
 
-**Postfix와 DNSMasq를 연결하는 Docker Compose 파일은 어떻게 구성하는가?**
+**기존 컨테이너 환경을 효율적으로 활용하는 방법은?**
 
-- [x] 기본 docker-compose.yml 작성
-- [x] Docker 네트워크를 격리하기 위한 독립 bridge 네트워크 설정
-- [ ] 또는 `--network none` 옵션 검토
+- [x] 현재 docker-compose.yml 분석
+- [ ] 각 컨테이너 역할 명확화
+  - mail-postfix: SMTP 서버 (취약점 테스트 대상)
+  - dns-dnsmasq: DNS 서버 (SPF 레코드 및 재귀 질의 테스트)
+  - mua-alpine: 클라이언트 (공격 스크립트 실행 환경)
 
-### 13. Postfix 컨테이너 실행 및 초기 점검
+### 13. 자동화 스크립트 개발
 
-**Postfix 컨테이너가 정상적으로 실행되었는지 어떻게 확인하는가?**
+**취약점 공격 및 패치 프로세스를 자동화하는 방법은?**
 
-- [x] 컨테이너 로그 점검
+- [ ] `attack_openrelay.sh` 스크립트 작성 (mua-alpine 컨테이너 내 실행)
+  - swaks 설치 및 설정
+  - 인증 없는 메일 전송
+  - 로그 자동 수집 (artifacts/before.log)
+
+- [ ] `harden_postfix.sh` 스크립트 작성 (mail-postfix 컨테이너 내 실행)
+  - postconf로 설정 변경
+  - Postfix 재로드 명령
+
+- [ ] `gen_report_html.sh` 스크립트 작성 (호스트 시스템에서 실행)
+  - 순수 HTML 형식의 보고서 생성
+  - diff를 통한 로그 비교 자동화
+
+### 14. 통합 데모 흐름 구성
+
+**30초 안에 전체 공격→패치→검증 흐름을 실행하는 Makefile 구성 방법은?**
+
+- [ ] `make demo` 명령 구현
+  ```
+  make demo
+  └─ ① docker compose에서 이미 실행 중인 컨테이너 활용
+  └─ ② docker exec mua-alpine bash /scripts/attack_openrelay.sh
+     ├─ Alpine 컨테이너에서 swaks로 인증 없는 메일 전송
+     └─ 로그 → artifacts/before.log
+  └─ ③ docker exec mail-postfix bash /scripts/harden_postfix.sh
+     ├─ postconf -e 'smtpd_recipient_restrictions = reject_unauth_destination'
+     └─ postfix reload
+  └─ ④ docker exec mua-alpine bash /scripts/attack_openrelay.sh  # 재검증
+     └─ 로그 → artifacts/after.log
+  └─ ⑤ bash scripts/gen_report_html.sh   # HTML 리포트 생성·열람
+  ```
+
+### 15. SMTP 서버 초기 설정 확인
+
+**취약점 테스트를 위한 Postfix 초기 설정은 어떻게 해야 하는가?**
+
+- [x] mail-postfix 컨테이너 로그 점검
 - [ ] SMTP 포트 개방 상태 확인
+- [ ] 오픈 릴레이 초기 상태 검증
 
-### 14. DNSMasq 컨테이너 실행 및 점검
+### 16. DNS 서버 설정
 
-**DNSMasq 컨테이너에서 재귀 질의 허용 여부는 어떻게 확인하는가?**
+**이메일 취약점 테스트를 위한 DNSMasq 구성 방법은?**
 
-- [ ] `dig` 명령어를 사용하여 외부 도메인 질의 테스트
+- [ ] SPF 레코드 설정 (약한 SPF 설정 ~all)
+- [ ] 재귀 질의 허용 설정
+- [ ] 도메인 설정 (mail.local → mail-postfix 컨테이너)
 
-### 15. SMTP 기본 통신 테스트
+### 17. 클라이언트 테스트 환경 구성
 
-**telnet을 통해 SMTP 세션을 열고 기본 명령어를 수행하는 방법은 무엇인가?**
+**mua-alpine 컨테이너에서 공격 테스트를 수행하기 위한 설정은?**
 
-- [ ] `HELO` 명령어 테스트
-- [ ] `MAIL FROM` 명령어 테스트
-- [ ] `RCPT TO` 명령어 테스트
-- [ ] `DATA` 명령어 테스트
+- [ ] swaks 설치
+- [ ] 테스트 스크립트 복사
+- [ ] 결과 저장 디렉토리 설정
 
-### 16. 이메일 서버의 보안 기본 상태 점검
+## Part 4: 우선순위 실험 및 분석
 
-**기본 설치된 Postfix는 어떤 보안 기능(STARTTLS, 인증 등)을 활성화하고 있는가?**
-
-- [ ] `openssl s_client`로 STARTTLS 지원 여부 점검
-- [ ] 자체 서명 인증서나 만료 인증서 사용 시 발생하는 경고 관찰
-- [ ] 보안 리스크 문서화
-
-## Part 4: 전문 실험 및 분석
-
-### 17. 오픈 릴레이 취약 구성 및 이해
+### 18. 오픈 릴레이 취약 구성 및 이해
 
 **오픈 릴레이는 어떻게 구성되고, SMTP relay control 구조는 무엇인가?**
 
 - [ ] `smtpd_recipient_restrictions` 설정을 `permit_mynetworks`로 구성
+- [ ] 오픈 릴레이 상태 자동 검증
 
-### 18. 오픈 릴레이 악용 가능성 실험
+### 19. 오픈 릴레이 악용 가능성 실험
 
 **인증 없이 메일 릴레이가 가능한지 어떻게 실험하는가?**
 
-- [ ] telnet으로 인증 없는 RCPT TO 시도
+- [ ] mua-alpine에서 swaks로 인증 없는 외부 도메인 메일 전송
 - [ ] 릴레이 성공 여부 확인
+- [ ] 자동화된 결과 기록
 
-### 19. DNS 재귀 질의 취약 구성 및 이해
-
-**DNS 재귀 허용이 공격 벡터로 작동하는 구조는 무엇인가?**
-
-- [ ] DNSMasq에서 재귀 질의 허용 설정 적용
-- [ ] 재귀 질의 테스트
-
-### 20. SPF 레코드 약화 설정 및 실험
-
-**약한 SPF(~all) 레코드는 어떤 식으로 스푸핑 공격을 가능하게 하는가?**
-
-- [ ] 약한 SPF 레코드 설정
-- [ ] 외부 도메인 스푸핑 테스트
-
-### 21. STARTTLS 미지원 환경 구성 및 실험
-
-**STARTTLS 없이 SMTP 인증을 시도하면 어떤 위험이 발생하는가?**
-
-- [ ] STARTTLS 미사용 설정
-- [ ] 평문 인증 패킷 확인
-
-### 22. SMTP 인증 평문 패킷 캡처 및 분석
-
-**평문 SMTP 인증은 실제 패킷에 어떤 식으로 노출되는가?**
-
-- [ ] Wireshark 또는 tcpdump로 AUTH PLAIN/LOGIN 패킷 캡처
-- [ ] 캡처된 패킷 분석
-
-### 23. 오픈 릴레이 스팸 릴레이 시뮬레이션
-
-**오픈 릴레이를 이용해 제3자에게 스팸 메일을 보내는 경로를 어떻게 만들 수 있는가?**
-
-- [ ] 외부 수신자 주소를 대상으로 릴레이 실험
-
-### 24. DNS 증폭 공격 이론 실험
-
-**재귀 DNS 서버를 이용한 증폭 공격은 어떤 메커니즘으로 작동하는가?**
-
-- [ ] `dig ANY` 질의 등 대형 응답 유발 실험
-
-### 25. 이메일 스푸핑 공격 시뮬레이션
-
-**발신자 위조(From Spoofing)는 실제 이메일 헤더에 어떻게 반영되는가?**
-
-- [ ] 위조된 MAIL FROM 사용
-- [ ] 수신자 측 헤더 분석
-
-### 26. 릴레이 서버 탐지 방법 연구
-
-**외부에서 오픈 릴레이 서버를 탐지하는 일반적인 방법은 무엇인가?**
-
-- [ ] nmap smtp-open-relay 스크립트 사용 실습
-- [ ] OpenVAS, Metasploit의 이메일 모듈 사용 가능성 탐색
-
-### 27. 취약 SMTP 서버 보안 강화 방법 연구
+### 20. 오픈 릴레이 보안 강화 및 검증
 
 **smtpd_recipient_restrictions를 안전하게 구성하려면 어떻게 해야 하는가?**
 
-- [ ] `permit_sasl_authenticated` 설정 적용
 - [ ] `reject_unauth_destination` 설정 적용
+- [ ] postfix reload로 설정 적용
+- [ ] 동일 공격 재시도 및 차단 확인
 
-### 28. DNSMasq 보안 강화 방법 연구
+### 21. SPF 레코드 약화 설정 및 실험 (2순위)
 
-**DNSMasq에서 재귀 질의를 로컬 네트워크로만 제한하는 방법은 무엇인가?**
+**약한 SPF(~all) 레코드는 어떤 식으로 스푸핑 공격을 가능하게 하는가?**
 
-- [ ] `--local-service` 옵션 적용
-- [ ] 제한 설정 테스트
+- [ ] dns-dnsmasq에서 약한 SPF 레코드 설정
+- [ ] 외부 도메인 스푸핑 테스트
+- [ ] 수신 측 SPF 검증 과정 분석
 
-### 29. SPF, DKIM, DMARC 인증 강화 방법 연구
+### 22. STARTTLS 미지원 환경 구성 및 실험 (2순위)
 
-**이메일 인증 체계를 강건하게 구성하는 방법은 무엇인가?**
+**STARTTLS 없이 SMTP 인증을 시도하면 어떤 위험이 발생하는가?**
 
-- [ ] SPF `-all` 설정
-- [ ] DKIM 키 생성 및 적용 흐름 요약
-- [ ] DMARC 정책 설정 방법 정리
+- [ ] mail-postfix에서 STARTTLS 미사용 설정
+- [ ] 평문 인증 패킷 확인
+- [ ] tcpdump로 패킷 캡처 분석
 
-### 30. 종합 취약점 리스크 매핑
+### 23. DNS 재귀 질의 취약 구성 및 이해 (3순위)
+
+**DNS 재귀 허용이 공격 벡터로 작동하는 구조는 무엇인가?**
+
+- [ ] dns-dnsmasq에서 재귀 질의 허용 설정 적용
+- [ ] 재귀 질의 테스트
+- [ ] 증폭 공격 가능성 분석
+
+## Part 5: 보고서 생성 및 최종 정리
+
+### 24. HTML 리포트 파이프라인 구현
+
+**경량 HTML 보고서 자동 생성 방법은?**
+
+- [ ] `gen_report_html.sh` 스크립트 완성
+  - 환경 정보 자동 수집
+  - 로그 diff 자동 생성
+  - 스타일이 적용된 HTML 보고서 생성
+  - 브라우저 자동 열기
+
+### 25. CI/CD 최적화 전략
+
+**GitHub Actions 등 CI 환경에서 실험을 효율적으로 실행하는 방법은?**
+
+- [ ] docker-compose 최적화
+  ```yaml
+  # docker-compose.ci.yml 예시
+  version: "3.9"
+  services:
+    mail-postfix:
+      image: boky/postfix:alpine
+    # 나머지 설정...
+  ```
+- [ ] 이미지 캐싱 전략 (`docker pull` 선행)
+- [ ] 아티팩트 최소화 (`artifacts/*.html`만 업로드)
+- [ ] timeout 최적화 (15분 → 5분)
+
+### 26. 종합 취약점 리스크 매핑
 
 **발견된 취약점들을 위협모델링 관점에서 어떻게 정리할 수 있는가?**
 
@@ -234,24 +264,117 @@
 - [ ] 각 취약점의 영향 분석
 - [ ] 취약점별 대응 방안 표로 구성
 
-### 31. 전체 실험 결과 요약 보고서 초안 작성
-
-**보고서에 어떤 흐름으로 작성하면 자연스러운가?**
-
-- [ ] 실험 목표 정리
-- [ ] 환경 구축 내용 요약
-- [ ] 발견된 취약점 목록화
-- [ ] 대응 방안 흐름으로 초안 작성
-
-### 32. 최종 정리 및 개인 메모 작성
+### 27. 최종 정리 및 개인 메모 작성
 
 **이번 실험을 통해 얻은 가장 중요한 교훈은 무엇인가?**
 
 - [ ] 개인 메모로 실험 소회 정리
+- [ ] 향후 개선 방향 제안
+- [ ] 학습 자료 및 참고 문헌 정리
 
-## 부록: 안전한 실험 환경 유지를 위한 지침
+## 부록: 개선된 데모 흐름
 
-- 모든 테스트는 반드시 로컬 격리 환경에서만 수행한다.
-- 실험 결과는 학술적, 교육적, 방어 전략 수립 목적으로만 사용한다.
-- 네트워크 통제, 패킷 분석, 탐지 방지 등을 윤리적으로 검토한다.
+```
+make demo
+└─ ① 기존 컨테이너 활용 (mail-postfix, dns-dnsmasq, mua-alpine)
+└─ ② 필요한 도구 설치 (swaks, tcpdump 등)
+   └─ docker exec mua-alpine apk add --no-cache swaks
+   └─ docker exec mail-postfix apk add --no-cache tcpdump
+└─ ③ 공격 스크립트 복사 및 실행
+   └─ docker cp scripts/attack_openrelay.sh mua-alpine:/tmp/
+   └─ docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/before.log
+└─ ④ 보안 강화 스크립트 실행
+   └─ docker cp scripts/harden_postfix.sh mail-postfix:/tmp/
+   └─ docker exec mail-postfix bash /tmp/harden_postfix.sh
+└─ ⑤ 공격 재시도 및 결과 검증
+   └─ docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/after.log
+└─ ⑥ 결과 파일 호스트로 복사
+   └─ docker cp mua-alpine:/tmp/before.log artifacts/
+   └─ docker cp mua-alpine:/tmp/after.log artifacts/
+└─ ⑦ HTML 리포트 생성
+   └─ bash scripts/gen_report_html.sh
+```
 
+## 실험 우선순위 정리
+
+| 우선순위 | 실험 항목 | 설명 |
+|---------|----------|------|
+| 1순위 | 오픈 릴레이 ▶ 패치 흐름 완성 | 기본 데모의 핵심, 30초 실행 목표 |
+| 2순위 | SPF 약화·스푸핑 데모 | 이메일 공격의 대표적 사례 |
+| 2순위 | STARTTLS 평문 인증 캡처 | 암호화 부재의 위험성 시각화 |
+| 3순위 | DNS 재귀·증폭 실험 | DNS 계층 취약점 이해 |
+| 3순위 | CI 배지·상태 대시보드 | 지속적 통합 최적화 |
+
+## 핵심 스크립트 예시
+
+### HTML 리포트 생성 스크립트
+
+```bash
+#!/usr/bin/env bash
+# scripts/gen_report_html.sh
+ts=$(date -u +%Y%m%d-%H%M%S)
+report=artifacts/demo-$ts.html
+
+# 디렉토리 생성
+mkdir -p artifacts
+
+cat > "$report" <<EOF
+<!DOCTYPE html>
+<html lang="en"><meta charset="utf-8">
+<title>SMTP-DNS Lab Report $ts</title>
+<style>
+body{font-family:monospace;background:#fafafa;margin:2rem;}
+h1{font-size:1.4rem;border-bottom:1px solid #555;}
+pre{background:#eee;padding:1rem;border-radius:5px;}
+</style>
+<h1>Environment</h1>
+<pre>$(docker compose ps --format table)</pre>
+
+<h1>Log diff</h1>
+<pre>$(diff -u artifacts/before.log artifacts/after.log)</pre>
+
+<h1>Verdict</h1>
+<p><b>Fix ✔</b></p>
+</html>
+EOF
+
+xdg-open "$report" 2>/dev/null || open "$report"
+```
+
+### Makefile 예시
+
+```makefile
+# Makefile
+.PHONY: demo clean setup
+
+demo: setup attack-before patch attack-after report
+
+setup:
+	@echo "=== Setting up test environment ==="
+	docker exec mua-alpine apk add --no-cache swaks
+	mkdir -p artifacts
+
+attack-before:
+	@echo "=== Running attack before hardening ==="
+	docker cp scripts/attack_openrelay.sh mua-alpine:/tmp/
+	docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/before.log
+	docker cp mua-alpine:/tmp/before.log artifacts/
+
+patch:
+	@echo "=== Applying security patch ==="
+	docker cp scripts/harden_postfix.sh mail-postfix:/tmp/
+	docker exec mail-postfix bash /tmp/harden_postfix.sh
+
+attack-after:
+	@echo "=== Running attack after hardening ==="
+	docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/after.log
+	docker cp mua-alpine:/tmp/after.log artifacts/
+
+report:
+	@echo "=== Generating HTML report ==="
+	bash scripts/gen_report_html.sh
+
+clean:
+	@echo "=== Cleaning up ==="
+	rm -rf artifacts/*.log artifacts/*.html
+```
