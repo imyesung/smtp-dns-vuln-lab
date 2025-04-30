@@ -1,0 +1,26 @@
+# docker-compose.yml
+version: "3.9"
+
+services:
+  mail-postfix:
+    image: boky/postfix          
+    container_name: mail-postfix
+    environment:
+      - ALLOW_EMPTY_SENDER=yes
+      - SMTP_SERVER_HOSTNAME=mail.local
+    ports:
+      - "25:25"                  # SMTP Relay
+      - "587:587"                # Submission
+
+  dns-dnsmasq:
+    image: andyshinn/dnsmasq     # DNSMasq 공식 이미지
+    container_name: dns-dnsmasq
+    command: ["-k"]              # 포그라운드 모드
+    ports:
+      - "53:53/udp"              # DNS
+
+  mua-alpine:
+    image: alpine:latest         # 더미 MUA
+    container_name: mua-alpine
+    tty: true                   
+    command: ["sh"]              
