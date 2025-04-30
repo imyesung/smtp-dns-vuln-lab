@@ -8,7 +8,7 @@ send:
 	bash scripts/sendmail.sh
 
 logs:
-	tail -f artifacts/latest/postfix.log
+	docker logs -f mail-postfix	
 
 reproduce:
 	bash scripts/reproduce.sh

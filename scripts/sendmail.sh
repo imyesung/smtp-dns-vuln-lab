@@ -15,7 +15,7 @@ INDEX=$(($RANDOM % ${#MOODS[@]}))
 BODY="${MOODS[$INDEX]}"
 
 FROM="weirdbot@test.local"
-TO="hacker@test.local"
+TO="root@localhost"
 SUBJECT="Your Daily Chaos Report #$RANDOM"
 
 # 메일 전송 (Postfix 컨테이너 안에서 실행)

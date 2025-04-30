@@ -6,7 +6,7 @@ services:
     image: boky/postfix          
     container_name: mail-postfix
     environment:
-      - ALLOW_EMPTY_SENDER=yes
+      - ALLOW_EMPTY_SENDER_DOMAINS=yes
       - SMTP_SERVER_HOSTNAME=mail.local
     ports:
       - "25:25"                  # SMTP Relay
