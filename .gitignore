@@ -1,9 +1,48 @@
-# 실행 산출물
-results/
+# ───── 프로젝트 산출물 무시 ─────
+artifacts/*
+!artifacts/README.md        # 예: artifacts 내 문서 유지용
+
 *.log
 *.pcap
+*.tmp
+*.out
+*.core
 
-# 편집기·OS
+# ───── Docker 관련 임시 파일 무시 ─────
+*.pid
+*.sock
+
+# ───── Python 관련 무시 항목 ─────
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# ───── 편집기 및 OS ─────
 .DS_Store
+*.swp
+*.swo
 .idea/
 .vscode/
+
+# ───── 테스트 전용 스크립트 무시 (선택적으로 반영) ─────
+scripts/test_*.sh
+scripts/debug_*.sh
+
+# ───── mail log 디렉터리 하위만 무시 ─────
+logs/*
+!logs/.keep                 # 디렉터리 구조만 유지할 때
+
+# ───── 환경 변수 파일 예외처리 ─────
+.env
+.env.*
+
+# ───── 무조건 남길 파일들 예외처리 ─────
+!scripts/sendmail.sh
+!scripts/fetchmail.sh
+!Makefile
+!docker-compose.yml
+!config/
+!docs/
+!README.md
+!lab-notebook.md
