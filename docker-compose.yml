@@ -1,6 +1,4 @@
 # docker-compose.yml
-version: "3.9"
-
 services:
   mail-postfix:
     image: boky/postfix          
@@ -20,9 +18,21 @@ services:
     ports:
       - "53:53/udp"              # DNS
 
-  mua-alpine:
-    image: alpine:latest         # 더미 MUA
-    container_name: mua-alpine
-    tty: true                   
-    command: ["sh"]              
+  mua-debian:
+    container_name: mua-debian
+    build:
+      context: .
+      dockerfile: mua.Dockerfile
+    networks:
+      - smtp-net
+    volumes:
+      - ./scripts:/scripts
+      - ./artifacts:/artifacts
 
+networks:
+  smtp-net:
+    driver: bridge
+  dns-net:
+    driver: bridge
+  mgmt-net:
+    driver: bridge
