@@ -24,7 +24,6 @@
   - mua-debian 컨테이너에서 공격 시뮬레이션
   - 결과 비교 및 HTML 리포트 자동 생성
 
-  ---
   ```
   [관리자 컨트롤]
     │
@@ -52,6 +51,7 @@
          [6] 리포트 생성 (gen_report_html.sh)
              - before/after 비교 시각화
 ```
+
 ## Core Tasks
 
 ### 1단계: 실험 환경 및 기본 흐름 준비
@@ -66,17 +66,13 @@
 | 6 | Docker 네트워크 3분할 구성 | 완료 | CIDR 기반 분리 확인 | e723f45: 네트워크 분할 |
 | 7 | attack_openrelay.sh 작성 및 실행 | 완료 | swaks로 인증 없는 메일 전송 | 98a71b2: feat: 오픈릴레이 공격 스크립트 |
 
----
-
 ### 2단계: 패킷 기반 증명 및 자동화
 
 | 번호 | 항목 | 상태 | 작업 내용 | 실험 벡터 |
 |------|------|------|-----------|------------|
-| 7-1 | SMTP 패킷 캡처 스크립트 작성 | 진행 중 | `capture_smtp.sh` 작성 (tcpdump 포트 25, 465, 587) | SMTP 프로토콜 분석 |
+| 7-1 | SMTP 패킷 캡처 스크립트 작성 | 완료 | `capture_smtp.sh` 작성 (tcpdump 포트 25, 465, 587) | SMTP 프로토콜 분석 |
 | 7-2 | 공격 전/후 자동 패킷 수집 | 진행 중 | 관리 서버→클라이언트 실행 구조 | 자동화 파이프라인 |
 | 7-3 | SMTP 패킷 분석 스크립트 | 진행 중 | `analyze_pcap.sh` (SMTP 명령어 추출) | 프로토콜 취약점 분석 |
-
----
 
 ### 3단계: 보안 강화 및 검증
 
@@ -89,8 +85,6 @@
 | 8-4 | smtpd_helo_restrictions 설정 | 계획됨 | HELO 명령어 검증 설정 | HELO 스푸핑 방지 |
 | 8-5 | 보안 설정 백업 메커니즘 | 계획됨 | 설정 파일 자동 백업 | 설정 버전 관리 |
 | 9 | 보안 강화 후 재공격 테스트 | 진행 중 | before/after 로그 비교 | 대응 효과 검증 |
-
----
 
 ### 4단계: 리포트 및 정량화
 
@@ -127,21 +121,44 @@
 | 22 | 메일 헤더 위조 실험 항목 추가 | 향후 계획 | From 헤더 위변조 검증 | 기밀성 우회 실험 |
 | 23 | 테스트 메일 로그 수신 여부 확인 | 향후 계획 | MTA 로그 기반 검증 | 전송 완료성 검증 |
 
-## 부록: 개선된 데모 흐름
+---
+
+실험 흐름 요약
+
+1. 초기 상태 세팅 (clean or default)
+   - 기존 컨테이너 종료 및 로그/데이터 초기화
+
+2. run_experiment.sh ①
+   - 취약 상태(Postfix 미강화)에서 SMTP 오픈 릴레이 실험 실행
+   - 캡처, 공격, 분석, 결과 요약까지 자동 수행
+
+3. harden_postfix.sh
+   - Postfix 설정을 강화하여 오픈 릴레이 방지 설정 적용
+   - 인증 요구, 수신 제한 등 보안 정책 반영
+
+4. run_experiment.sh ②
+   - 강화 상태에서 동일한 실험 재수행
+   - 결과 비교를 위한 로그 자동 저장
+
+5. gen_report_html.sh
+   - before/after 로그 비교 결과를 기반으로 HTML 리포트 생성
+   - 공격 성공 여부, SMTP 세션 통계 등을 시각화하여 요약
+
+부록: 실행 명령어 기반 상세 흐름 (make demo 내부 구성)
 
 ```
 make demo
 └─ ① 기존 컨테이너 활용 (mail-postfix, dns-dnsmasq, mua-alpine)
-└─ ② 필요한 도구 설치 (swaks, tcpdump 등)
+└─ ② 필요한 도구 설치
    └─ docker exec mua-alpine apk add --no-cache swaks
    └─ docker exec mail-postfix apk add --no-cache tcpdump
-└─ ③ 공격 스크립트 복사 및 실행
+└─ ③ 공격 스크립트 복사 및 실행 (before)
    └─ docker cp scripts/attack_openrelay.sh mua-alpine:/tmp/
    └─ docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/before.log
 └─ ④ 보안 강화 스크립트 실행
    └─ docker cp scripts/harden_postfix.sh mail-postfix:/tmp/
    └─ docker exec mail-postfix bash /tmp/harden_postfix.sh
-└─ ⑤ 공격 재시도 및 결과 검증
+└─ ⑤ 공격 재시도 및 결과 검증 (after)
    └─ docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/after.log
 └─ ⑥ 결과 파일 호스트로 복사
    └─ docker cp mua-alpine:/tmp/before.log artifacts/
