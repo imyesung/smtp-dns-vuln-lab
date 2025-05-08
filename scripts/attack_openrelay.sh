@@ -35,22 +35,31 @@ EOF
 # JSON 문자열에서 불필요한 앞 공백 제거 (here document 사용 시 발생 가능)
 echo "$START_INFO_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
 
-# swaks 실행 부분을 임시 파일로 출력 후 읽어오는 방식으로 변경
+# swaks 옵션 호환성 확인
+SWAKS_OPTS=(
+  --to "$TO" 
+  --from "$FROM" 
+  --server "$TARGET" 
+  --port "$PORT" 
+  --auth-user "" 
+  --auth-password "" 
+  --timeout 10 
+  --header "Subject: $SUBJECT" 
+  --body "$BODY" 
+  --hide-all
+  --protocol SMTP 
+  --tls-optional
+)
+
+# show-raw-message 옵션 호환성 확인
+if swaks --help 2>&1 | grep -q -- "--show-raw-message"; then
+  SWAKS_OPTS+=("--show-raw-message")
+fi
+
+# swaks 실행 (배열 확장 구문 사용)
 SWAKS_OUTPUT_FILE=$(mktemp "${LOG_DIR}/swaks_raw_${ATTACK_ID}_XXXXXX.tmp")
-swaks --to "$TO" \
-      --from "$FROM" \
-      --server "$TARGET" \
-      --port "$PORT" \
-      --auth-user "" \
-      --auth-password "" \
-      --timeout 10 \
-      --header "Subject: $SUBJECT" \
-      --body "$BODY" \
-      --hide-all \
-      --show-raw-message \
-      --protocol SMTP \
-      --tls-optional > "$SWAKS_OUTPUT_FILE" 2>&1
-EXIT_CODE=$? # swaks 명령 자체의 종료 코드
+swaks "${SWAKS_OPTS[@]}" > "$SWAKS_OUTPUT_FILE" 2>&1
+EXIT_CODE=$?
 
 # swaks 출력을 JSON 문자열로 안전하게 만들기 위한 처리
 # sed를 사용한 기본적인 이스케이프 처리 (백슬래시, 큰따옴표, 개행 문자)
