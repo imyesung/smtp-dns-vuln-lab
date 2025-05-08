@@ -24,6 +24,34 @@
   - mua-debian 컨테이너에서 공격 시뮬레이션
   - 결과 비교 및 HTML 리포트 자동 생성
 
+  ---
+  ```
+  [관리자 컨트롤]
+    │
+    ├─▶ [1] 공격 스크립트 (attack_openrelay.sh)
+    │        ↓
+    │        인증 없이 메일 전송 (swaks)
+    │
+    ├─▶ [2] 패킷 캡처 스크립트 (capture_smtp.sh)
+    │        ↓
+    │        지정된 포트(25/465/587) TCPDUMP → before.pcap 저장
+    │
+    ├─▶ [3] 분석 스크립트 (analyze_packets.sh 또는 report_html_gen.sh 내 포함?)
+    │        ↓
+    │        패킷에서 SMTP 명령 추출 및 요약
+    │        (예: EHLO, MAIL FROM 등)
+    │ 
+    ├─▶ [4] 보안 강화 스크립트 (harden_postfix.sh)
+    │        ├─ smtpd_relay_restrictions
+    │        ├─ mynetworks 제한
+    │        ├─ recipient / helo 검증
+    │        └─ 설정 백업
+    │
+    └─▶ [5] 재공격 → 패킷 재수집 (after.pcap)
+             ↓
+         [6] 리포트 생성 (gen_report_html.sh)
+             - before/after 비교 시각화
+```
 ## Core Tasks
 
 ### 1단계: 실험 환경 및 기본 흐름 준비
