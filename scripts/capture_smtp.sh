@@ -1,12 +1,17 @@
 #!/bin/bash
 
+# 인자로 ATTACK_ID 받기
+ATTACK_ID="$1"
+if [[ -z "$ATTACK_ID" ]]; then
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    ATTACK_ID="ORT-${TIMESTAMP}"  # attack_openrelay.sh와 동일한 식별자 형식
+fi
+
 # 설정 변수
 INTERFACE="eth0"  # 네트워크 인터페이스
 TARGET="mail-postfix"
 PORT=25
 LOG_DIR="/artifacts"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-ATTACK_ID="ORT-${TIMESTAMP}"  # attack_openrelay.sh와 동일한 식별자 형식
 PCAP_FILE="${LOG_DIR}/smtp_${ATTACK_ID}.pcap"
 LOG_FILE="${LOG_DIR}/tcpdump_${ATTACK_ID}.log"
 
