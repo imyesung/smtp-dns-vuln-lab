@@ -52,6 +52,14 @@ log_info "===== SMTP 오픈 릴레이 테스트 실험 시작 ====="
 log_info "실험 ID: $ATTACK_ID"
 log_info "로그 디렉토리: $LOG_DIR"
 
+# 파일 경로 미리 정의 (일관성 확보)
+PCAP_FILE="${LOG_DIR}/smtp_${ATTACK_ID}.pcap"
+ATTACK_LOG="${LOG_DIR}/openrelay_${ATTACK_ID}.log"
+ANALYSIS_FILE="${LOG_DIR}/analysis_${ATTACK_ID}.txt"
+
+log_info "패킷 캡처 파일: $PCAP_FILE"
+log_info "공격 로그 파일: $ATTACK_LOG"
+
 # 1단계: 캡처 시작 (백그라운드)
 log_step "1. SMTP 트래픽 캡처 시작"
 ./capture_smtp.sh "$ATTACK_ID" &
@@ -59,11 +67,27 @@ CAPTURE_PID=$!
 
 # 캡처가 시작될 때까지 대기
 sleep 3
-if ! ps -p $CAPTURE_PID > /dev/null; then
+# ps 명령어 대신 kill -0 사용하여 프로세스 존재 확인
+if ! kill -0 $CAPTURE_PID 2>/dev/null; then
     log_error "캡처 프로세스가 정상적으로 시작되지 않았습니다."
     exit 2
 fi
 log_info "캡처 프로세스 PID: $CAPTURE_PID"
+
+# 캡처 파일 생성 확인
+for i in {1..5}; do
+    if [[ -f "$PCAP_FILE" ]] || [[ -f "${PCAP_FILE}.temp" ]]; then
+        log_info "패킷 캡처 파일이 생성되었습니다."
+        break
+    fi
+    
+    if [[ $i -eq 5 ]]; then
+        log_warn "패킷 캡처 파일이 아직 생성되지 않았습니다. 계속 진행합니다."
+    else
+        log_info "패킷 캡처 파일 생성 대기 중... ($i/5)"
+        sleep 1
+    fi
+done
 
 # 2단계: 공격 실행
 log_step "2. 오픈 릴레이 테스트 실행"
@@ -89,8 +113,6 @@ log_info "캡처 프로세스 종료됨"
 
 # 4단계: PCAP 분석
 log_step "4. 캡처된 패킷 분석"
-PCAP_FILE="${LOG_DIR}/smtp_${ATTACK_ID}.pcap"
-ANALYSIS_FILE="${LOG_DIR}/analysis_${ATTACK_ID}.txt"
 
 if [[ ! -f "$PCAP_FILE" ]]; then
     log_error "캡처 파일이 생성되지 않았습니다: $PCAP_FILE"
