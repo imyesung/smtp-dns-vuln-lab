@@ -29,11 +29,13 @@ EOF
 )
 echo "$START_INFO_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
 
-# tcpdump 실행 명령 (필터: 특정 호스트와 포트)
-echo "실행 명령: tcpdump -i $INTERFACE -nn -s0 -vvv 'host $TARGET and port $PORT' -w $PCAP_FILE" | tee -a "$LOG_FILE"
+# 실행 명령 로깅 (포트 25, 465, 587 모두 포함)
+echo "실행 명령: tcpdump -i $INTERFACE -nn -s0 -vvv '(host $TARGET) and (port 25 or port 465 or port 587)' -w $PCAP_FILE" | tee -a "$LOG_FILE"
 
 # tcpdump 실행 (백그라운드)
-tcpdump -i "$INTERFACE" -nn -s0 -vvv "host $TARGET and port $PORT" -w "$PCAP_FILE" 2>> "$LOG_FILE" &
+tcpdump -i "$INTERFACE" -nn -s0 -vvv \
+  "(host $TARGET) and (port 25 or port 465 or port 587)" \
+  -w "$PCAP_FILE" 2>> "$LOG_FILE" &
 TCPDUMP_PID=$!
 
 echo "패킷 캡처 시작됨 (PID: $TCPDUMP_PID)" | tee -a "$LOG_FILE"
