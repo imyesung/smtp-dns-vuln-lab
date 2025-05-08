@@ -34,12 +34,17 @@ EOF
 )
 echo "$START_INFO_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
 
-# 실행 명령 로깅 (포트 25, 465, 587 모두 포함)
-echo "실행 명령: tcpdump -i $INTERFACE -nn -s0 -vvv '(host $TARGET) and (port 25 or port 465 or port 587)' -w $PCAP_FILE" | tee -a "$LOG_FILE"
+# 호스트명을 IP로 해석 (getent 또는 ping 사용)
+TARGET_IP=$(getent hosts "$TARGET" 2>/dev/null | awk '{ print $1 }' || \
+            ping -c 1 -t 1 "$TARGET" 2>/dev/null | head -n 1 | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' || \
+            echo "$TARGET")
 
-# tcpdump 실행 (백그라운드)
+# 실행 명령 로깅 수정
+echo "실행 명령: tcpdump -i $INTERFACE -nn -s0 -vvv '(host $TARGET_IP) and (port 25 or port 465 or port 587)' -w $PCAP_FILE" | tee -a "$LOG_FILE"
+
+# tcpdump 실행 (백그라운드) - 호스트 이름 대신 IP 사용
 tcpdump -i "$INTERFACE" -nn -s0 -vvv \
-  "(host $TARGET) and (port 25 or port 465 or port 587)" \
+  "(host $TARGET_IP) and (port 25 or port 465 or port 587)" \
   -w "$PCAP_FILE" 2>> "$LOG_FILE" &
 TCPDUMP_PID=$!
 
