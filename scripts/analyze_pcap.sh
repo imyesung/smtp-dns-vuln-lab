@@ -32,19 +32,29 @@ EOF
 
 # SMTP 명령과 응답 추출 (포트 25, 465, 587)
 echo "SMTP 명령어 및 응답 추출 중..."
-tshark -r "$PCAP_FILE" -Y "smtp" -T fields -e frame.time_relative -e ip.src -e ip.dst -e smtp.req.command -e smtp.req.parameter -e smtp.response.code -e smtp.response.parameter -E header=y -E separator=" | " -E quote=n | sort -n >> "$OUTPUT_FILE"
+tshark -r "$PCAP_FILE" -Y "smtp" -T fields \
+       -e frame.time_relative \
+       -e ip.src \
+       -e ip.dst \
+       -e smtp.req.command \
+       -e smtp.req.parameter \
+       -e smtp.response.code \
+       -e data.text \
+       -E header=y -E separator=" | " -E quote=n | sort -n >> "$OUTPUT_FILE"
 echo "" >> "$OUTPUT_FILE"
 echo "\`\`\`" >> "$OUTPUT_FILE"
 
 # 메일 내용 추출 (DATA 명령 이후의 내용)
 echo -e "\n## 메일 내용 (있는 경우)\n\`\`\`" >> "$OUTPUT_FILE"
-tshark -r "$PCAP_FILE" -Y "smtp.data.fragment" -T fields -e smtp.data.fragment -E header=n -E quote=n >> "$OUTPUT_FILE"
+tshark -r "$PCAP_FILE" -Y "smtp.data.fragment" \
+       -T fields -e smtp.data.fragment \
+       -E header=n -E quote=n >> "$OUTPUT_FILE"
 echo -e "\`\`\`\n" >> "$OUTPUT_FILE"
 
 # 메타데이터 통계 추가
 echo -e "## 메타데이터 및 통계\n" >> "$OUTPUT_FILE"
-TOTAL_PKTS=$(tshark -r "$PCAP_FILE" -T fields | wc -l)
-SMTP_PKTS=$(tshark -r "$PCAP_FILE" -Y "smtp" -T fields | wc -l)
+TOTAL_PKTS=$(tshark -r "$PCAP_FILE" -T fields -e frame.number | wc -l)
+SMTP_PKTS=$(tshark -r "$PCAP_FILE" -Y "smtp" -T fields -e frame.number | wc -l)
 SMTP_CMDS=$(tshark -r "$PCAP_FILE" -Y "smtp.req.command" -T fields -e smtp.req.command | sort | uniq -c | sort -nr)
 
 echo "- 총 패킷 수: $TOTAL_PKTS" >> "$OUTPUT_FILE"

@@ -8,7 +8,7 @@ if [[ -z "$ATTACK_ID" ]]; then
 fi
 
 # 설정 변수
-INTERFACE="eth0"  # 네트워크 인터페이스
+INTERFACE="any"  # 네트워크 인터페이스
 TARGET="mail-postfix"
 PORT=25
 LOG_DIR="/artifacts"

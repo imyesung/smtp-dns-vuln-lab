@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# 인자로 ATTACK_ID 받기
+ATTACK_ID="$1"
+if [[ -z "$ATTACK_ID" ]]; then
+    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+    ATTACK_ID="ORT-${TIMESTAMP}" # 인자가 없을 경우에만 자체 생성
+fi
+
 # 설정 변수
 TARGET="mail-postfix"
 PORT=25
@@ -8,9 +15,7 @@ TO="victim@example.com"
 SUBJECT="Open Relay Test"
 BODY="This is an unauthenticated mail test."
 LOG_DIR="/artifacts"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_FILE="${LOG_DIR}/openrelay_${TIMESTAMP}.log" # NDJSON 형식으로 저장
-ATTACK_ID="ORT-${TIMESTAMP}" # 공격 식별자
+LOG_FILE="${LOG_DIR}/openrelay_${ATTACK_ID}.log" # ATTACK_ID 사용
 
 # 로그 디렉토리 생성
 mkdir -p "$LOG_DIR"
