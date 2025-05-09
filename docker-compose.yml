@@ -6,6 +6,8 @@ services:
     environment:
       - ALLOW_EMPTY_SENDER_DOMAINS=yes
       - SMTP_SERVER_HOSTNAME=mail.local
+    networks:
+      - smtp-net
     ports:
       - "25:25"                  # SMTP Relay
       - "587:587"                # Submission
