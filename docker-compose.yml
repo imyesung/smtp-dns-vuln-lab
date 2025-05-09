@@ -29,6 +29,17 @@ services:
       - ./scripts:/scripts
       - ./artifacts:/artifacts
 
+  controller:
+    build: ./controller
+    container_name: controller
+    networks:
+      - default
+      - smtp-net
+    volumes:
+      - ./scripts:/scripts
+      - ./artifacts:/artifacts
+    tty: true
+
 networks:
   smtp-net:
     driver: bridge
