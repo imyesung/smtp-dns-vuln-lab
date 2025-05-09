@@ -1,7 +1,14 @@
 FROM debian:bullseye-slim
 
-RUN apt-get update && \
-    apt-get install -y swaks && \
-    apt-get clean
+ENV DEBIAN_FRONTEND=noninteractive
 
-CMD ["tail", "-f", "/dev/null"]
+RUN apt-get update && apt-get install -y \
+    iputils-ping \
+    netcat \
+    swaks \
+    curl \
+    bash \
+    && apt-get clean
+
+WORKDIR /scripts
+ENTRYPOINT ["/bin/bash"]
