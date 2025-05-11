@@ -33,6 +33,9 @@ services:
 
   controller:
     build: ./controller
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     container_name: controller
     networks:
       - default

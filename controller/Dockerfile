@@ -1,16 +1,10 @@
 FROM debian:bullseye-slim
-
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt update && apt install -y \
-    iputils-ping \
-    netcat \
-    tcpdump \
-    curl \
-    swaks \
-    tshark \
-    bash \
-    && apt clean
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        iproute2 iputils-ping netcat tcpdump tshark swaks curl bash && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /scripts
 ENTRYPOINT ["/bin/bash"]
