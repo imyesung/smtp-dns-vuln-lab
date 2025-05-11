@@ -1,252 +1,218 @@
-# Docker 기반 이메일 서버 취약점 실험 및 분석
+# SMTP & DNS Vulnerability Lab – Progress Notebook
+*Last updated: 2025-05-12*
 
->  이론 학습 참고<br> https://publish.obsidian.md/imyesung/smtp-dns-vuln-lab/index
+<https://publish.obsidian.md/imyesung/smtp-dns-vuln-lab/index>
 
-## 프로젝트 개요
-- Docker 환경을 기반으로 실험용 이메일 서버(Postfix, DNSMasq 등)를 구축한다.
-- 이메일 서버 작동 원리를 SMTP, POP3, IMAP 수준까지 기초부터 정확히 이해한다.
-- 구조적 취약점을 직접 실험하고, 공격 시나리오를 구성하며, 대응 방법까지 탐구한다.
-- 실험 과정과 결과를 종합하여 '이메일 서버 취약점 분석 보고서'를 작성하는 것을 최종 목표로 한다.
+## 1. Project Objective
+이메일 전송 인프라(`Postfix` + `DNSMasq`)를 **로컬 Docker** 환경에 재현하고, SMTP 오픈 릴레이 등 구조적 취약점을 실험·분석·대응한다.  
+최종 산출물은 자동화된 **실험 파이프라인**과 **보안 강화 보고서**이다.
 
-### 기본 전제
+## 2. Scope & Assumptions
+* 모든 실험은 로컬 Docker 네트워크에 한정한다.  
+* SMTP·POP3·IMAP 중 **SMTP** 시나리오를 우선한다.  
+* 외부 메일 서버나 실제 도메인 서비스와 연결하지 않는다.  
+* 이메일 서버 시스템에 대한 이해가 없는 초보자 관점에서 실험을 진행한다.  
 
-- 이메일 서버 시스템에 대한 이해가 없는 초보자 관점에서 실험을 진행한다.
-- 실험은 로컬 Docker 네트워크 내에서만 이루어진다.
-- 외부 인터넷과 격리된 환경에서 모든 테스트를 수행한다.
+## 3. Current Lab Topology
+| Container      | Role                                          |
+| -------------- | --------------------------------------------- |
+| `mail-postfix` | vulnerable SMTP server                        |
+| `dns-dnsmasq`  | stub DNS server (future SPF tests)            |
+| `mua-debian`   | client / attacker node                        |
+| `controller`   | automation, packet capture (`NET_ADMIN`, `NET_RAW`)
 
-### 현재 실험 환경
-- **mail-postfix**: 메일 서버
-- **dns-dnsmasq**: DNS 서버
-- **mua-debian**: 클라이언트 테스트용
-
-**데모 흐름 최적화**:
-  - mail-postfix 컨테이너에서 취약 설정 → 패치 → 재검증 흐름 구현
-  - mua-debian 컨테이너에서 공격 시뮬레이션
-  - 결과 비교 및 HTML 리포트 자동 생성
-
-  ```
-  [관리자 컨트롤]
-    │
-    ├─▶ [1] 공격 스크립트 (attack_openrelay.sh)
-    │        ↓
-    │        인증 없이 메일 전송 (swaks)
-    │
-    ├─▶ [2] 패킷 캡처 스크립트 (capture_smtp.sh)
-    │        ↓
-    │        지정된 포트(25/465/587) TCPDUMP → before.pcap 저장
-    │
-    ├─▶ [3] 분석 스크립트 (analyze_packets.sh 또는 report_html_gen.sh 내 포함?)
-    │        ↓
-    │        패킷에서 SMTP 명령 추출 및 요약
-    │        (예: EHLO, MAIL FROM 등)
-    │ 
-    ├─▶ [4] 보안 강화 스크립트 (harden_postfix.sh)
-    │        ├─ smtpd_relay_restrictions
-    │        ├─ mynetworks 제한
-    │        ├─ recipient / helo 검증
-    │        └─ 설정 백업
-    │
-    └─▶ [5] 재공격 → 패킷 재수집 (after.pcap)
-             ↓
-         [6] 리포트 생성 (gen_report_html.sh)
-             - before/after 비교 시각화
+## 4. Automated Demo Pipeline
 ```
-
-## Core Tasks
-
-### 1단계: 실험 환경 및 기본 흐름 준비
-
-| 번호 | 항목 | 상태 | 근거 | 커밋/목적 |
-|------|------|------|------|------------|
-| 1 | 실험 목표 및 자동화 흐름 정의 | 완료 | README.md, lab-notebook.md | 1461927: docs: 실험 방향 리디자인 |
-| 2 | 격리된 Docker 네트워크 구성 | 완료 | docker-compose.yml, 3개 네트워크 | e723f45: feat: 이메일 서버 네트워크 분리 |
-| 3 | 기본 메일 전송 스크립트 작성 | 완료 | sendmail.sh, fetchmail.sh | b02a912: feat: 기본 메일 전송 스크립트 |
-| 4 | 데모 자동화 구조 설계 | 완료 | Makefile, Mermaid.js 포함 | 1461927: docs: 실험 방향 리디자인 |
-| 5 | HTML 리포트 생성 스크립트 초안 | 완료 | gen_report_html.sh 초안 | d4e7f29: feat: 리포트 생성 초안 |
-| 6 | Docker 네트워크 3분할 구성 | 완료 | CIDR 기반 분리 확인 | e723f45: 네트워크 분할 |
-| 7 | attack_openrelay.sh 작성 및 실행 | 완료 | swaks로 인증 없는 메일 전송 | 98a71b2: feat: 오픈릴레이 공격 스크립트 |
-
-### 2단계: 패킷 기반 증명 및 자동화
-
-| 번호 | 항목 | 상태 | 작업 내용 | 실험 벡터 |
-|------|------|------|-----------|------------|
-| 7-1 | SMTP 패킷 캡처 스크립트 작성 | 완료 | `capture_smtp.sh` 작성 (tcpdump 포트 25, 465, 587) | SMTP 프로토콜 분석 |
-| 7-2 | 공격 전/후 자동 패킷 수집 | 완료 | 관리 서버→클라이언트 실행 구조 | 자동화 파이프라인 |
-| 7-3 | SMTP 패킷 분석 스크립트 | 진행 중 | `analyze_pcap.sh` (SMTP 명령어 추출) | 프로토콜 취약점 분석 |
-
-### 3단계: 보안 강화 및 검증
-
-| 번호 | 항목 | 상태 | 작업 내용 | 실험 벡터 |
-|------|------|------|-----------|------------|
-| 8 | Postfix 설정 강화 스크립트 | 진행 중 | `harden_postfix.sh` (postconf 명령어) | 보안 강화 자동화 |
-| 8-1 | smtpd_relay_restrictions 설정 | 계획됨 | 릴레이 제한 설정 | 릴레이 제한 |
-| 8-2 | mynetworks 제한 설정 | 계획됨 | CIDR 기반 제한 설정 | 네트워크 접근 제어 |
-| 8-3 | smtpd_recipient_restrictions 설정 | 계획됨 | 수신자 기반 제한 설정 | 수신자 검증 강화 |
-| 8-4 | smtpd_helo_restrictions 설정 | 계획됨 | HELO 명령어 검증 설정 | HELO 스푸핑 방지 |
-| 8-5 | 보안 설정 백업 메커니즘 | 계획됨 | 설정 파일 자동 백업 | 설정 버전 관리 |
-| 9 | 보안 강화 후 재공격 테스트 | 진행 중 | before/after 로그 비교 | 대응 효과 검증 |
-
-### 4단계: 리포트 및 정량화
-
-| 번호 | 항목 | 상태 | 작업 내용 | 실험 벡터 |
-|------|------|------|-----------|------------|
-| 10 | 리포트 자동화 확장 | 진행 중 | `gen_report_html.sh` 확장 | 결과 시각화 자동화 |
-| 10-1 | CVSS 점수 산정 로직 추가 | 계획됨 | 취약점 심각도 평가 | 위험도 평가 |
-| 10-2 | 보안 개선 효과 계량화 | 계획됨 | 공격 성공률 계량화 | 개선 효과 측정 |
-
----
-
-### 5단계: 정리 및 확장 계획
-
-| 번호 | 항목 | 상태 | 작업 내용 | 실험 벡터 |
-|------|------|------|-----------|------------|
-| 11 | artifacts 폴더 정리 및 결과 백업 | 진행 중 | 로그/pcap/리포트 백업 구조 | 결과물 관리 |
-| 12 | 타임스탬프 기반 로그 백업 | 계획됨 | 덮어쓰기 방지 메커니즘 | 결과 추적성 확보 |
-| 13 | Makefile 타깃 세분화 | 계획됨 | demo-before/after/report 구조 | 실행 흐름 자동화 |
-| 14 | 위협모델 기반 종합 정리 | 계획됨 | Mermaid.js 위협 구조도 | 보안 모델링 |
-| 19 | main.cf 설정 변경 diff 리포트 | 계획됨 | diff 기반 설정 변경 시각화 | 구성 변경 추적 |
-| 20 | SMTP 상호작용 시각화 | 계획됨 | 프로토콜 시퀀스 다이어그램 | 취약점 시각화 |
-| 21 | 공격 실패 메시지 유형 분류 | 계획됨 | 응답 코드별 카테고리화 | 보안 효과 분석 |
-
----
-
-### 6단계: 후순위 실험 계획
-
-| 번호 | 항목 | 상태 | 필요 작업 | 실험 벡터 |
-|------|------|------|-----------|------------|
-| 15 | DNS 재귀 질의 실험 | 향후 계획 | dnsmasq.conf 설정 필요 | DNS 취약점 |
-| 16 | SPF 위조 실험 | 향후 계획 | DNS TXT 레코드 조작 필요 | 이메일 스푸핑 |
-| 17 | STARTTLS 캡처 실험 | 향후 계획 | openssl/tcpdump 활용 예정 | 암호화 분석 |
-| 18 | SMTP 로그 기반 탐지 흐름 | 향후 계획 | mail.log 패턴 추출 및 탐지 | 이상 행위 탐지 |
-| 22 | 메일 헤더 위조 실험 항목 추가 | 향후 계획 | From 헤더 위변조 검증 | 기밀성 우회 실험 |
-| 23 | 테스트 메일 로그 수신 여부 확인 | 향후 계획 | MTA 로그 기반 검증 | 전송 완료성 검증 |
-
----
-
-실험 흐름 요약
-
-1. 초기 상태 세팅 (clean or default)
-   - 기존 컨테이너 종료 및 로그/데이터 초기화
-
-2. run_experiment.sh ①
-   - 취약 상태(Postfix 미강화)에서 SMTP 오픈 릴레이 실험 실행
-   - 캡처, 공격, 분석, 결과 요약까지 자동 수행
-
-3. harden_postfix.sh
-   - Postfix 설정을 강화하여 오픈 릴레이 방지 설정 적용
-   - 인증 요구, 수신 제한 등 보안 정책 반영
-
-4. run_experiment.sh ②
-   - 강화 상태에서 동일한 실험 재수행
-   - 결과 비교를 위한 로그 자동 저장
-
-5. gen_report_html.sh
-   - before/after 로그 비교 결과를 기반으로 HTML 리포트 생성
-   - 공격 성공 여부, SMTP 세션 통계 등을 시각화하여 요약
-
-부록: 실행 명령어 기반 상세 흐름 (make demo 내부 구성)
-
+[controller]
+├─ attack_openrelay.sh ─▶ swaks ─▶ [mail-postfix]
+│
+├─ capture_smtp.sh ─▶ tcpdump ─▶ before.pcap / after.pcap
+│
+├─ analyze_pcap.sh ─▶ tshark  ─▶ smtp_summary.json
+│
+├─ harden_postfix.sh ─▶ postconf │ (backup ⇆ restore)
+│
+└─ gen_report_html.sh ─▶ report.html (before vs after)
 ```
-make demo
-└─ ① 기존 컨테이너 활용 (mail-postfix, dns-dnsmasq, mua-alpine)
-└─ ② 필요한 도구 설치
-   └─ docker exec mua-alpine apk add --no-cache swaks
-   └─ docker exec mail-postfix apk add --no-cache tcpdump
-└─ ③ 공격 스크립트 복사 및 실행 (before)
-   └─ docker cp scripts/attack_openrelay.sh mua-alpine:/tmp/
-   └─ docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/before.log
-└─ ④ 보안 강화 스크립트 실행
-   └─ docker cp scripts/harden_postfix.sh mail-postfix:/tmp/
-   └─ docker exec mail-postfix bash /tmp/harden_postfix.sh
-└─ ⑤ 공격 재시도 및 결과 검증 (after)
-   └─ docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/after.log
-└─ ⑥ 결과 파일 호스트로 복사
-   └─ docker cp mua-alpine:/tmp/before.log artifacts/
-   └─ docker cp mua-alpine:/tmp/after.log artifacts/
-└─ ⑦ HTML 리포트 생성
-   └─ bash scripts/gen_report_html.sh
-```
+## 5. Progress Tracker  
 
-## 실험 우선순위 정리
+### Stage 1 ― 환경 구축 & 기준선 설정 (완료)
+| # | Task                   | Status | Evidence/Notes                     |
+|---|-----------------------|--------|------------------------------------|
+| 1 | 목표·흐름 정의            | ✓      | `README.md`, `lab-notebook.md`     |
+| 2 | Docker 네트워크 3분할      | ✓      | `docker-compose.yml`               |
+| 3 | 기본 메일 송·수신 스크립트   | ✓      | `sendmail.sh`, `fetchmail.sh`      |
+| 4 | 자동화 Makefile 골격      | ✓      | Makefile `demo-*` targets          |
 
-| 우선순위 | 실험 항목 | 설명 |
-|---------|----------|------|
-| 1순위 | 오픈 릴레이 ▶ 패치 흐름 완성 | 기본 데모의 핵심, 30초 실행 목표 |
-| 2순위 | SPF 약화·스푸핑 데모 | 이메일 공격의 대표적 사례 |
-| 2순위 | STARTTLS 평문 인증 캡처 | 암호화 부재의 위험성 시각화 |
-| 3순위 | DNS 재귀·증폭 실험 | DNS 계층 취약점 이해 |
-| 3순위 | CI 배지·상태 대시보드 | 지속적 통합 최적화 |
+### Stage 2 ― 패킷 증거 수집 & 자동화 (완료)
+| # | Task                    | Status | Evidence/Notes                      |
+|---|------------------------|--------|-------------------------------------|
+| 5 | `capture_smtp.sh` 작성   | ✓      | 포트 25/465/587, tcpdump             |
+| 6 | 자동 패킷 수집 흐름 완성     | ✓      | `run_experiment.sh` (BEFORE/AFTER)   |
+| 7 | `analyze_pcap.sh` 작성   | ✓      | tshark 기반 SMTP 명령 추출            |
 
-## 핵심 스크립트 예시
+### Stage 3 ― 하드닝 & 재테스트 (진행중)
+| #  | Task                         | Status | Evidence/Notes                     |
+|----|-----------------------------|--------|-------------------------------------|
+| 8  | `harden_postfix.sh` 작성     | ✓      | `smtpd_relay_restrictions` 등       |
+| 9  | 설정 백업 메커니즘 **[A1]**    | ▷      | `main.cf.bak-YYYYMMDD` (높음, 1h)    |
+| 10 | 재공격 테스트 & 비교           | ✓      | 로그·pcap diff 검증                  |
+| 11 | 타임스탬프 기반 로그 백업 **[A2]** | ▷    | 덮어쓰기 방지 메커니즘 (높음, 2h)       |
+| 12 | 스크립트 에러 핸들링 강화 **[B4]** | □    | `trap` 메커니즘 도입 (높음, 4h)        |
 
-### HTML 리포트 생성 스크립트
+#### A1. 설정 백업 메커니즘 세부 구현 계획
+1. 컨테이너 `mail-postfix` 내 `/etc/postfix/main.cf` 접근  
+2. ISO 8601 형식 타임스탬프 생성 함수 구현  
+3. rsync/scp 활용 백업 메커니즘 작성  
+4. 백업 전·후 무결성 검증 및 로깅  
+5. `harden_postfix.sh`에 백업 기능 통합  
 
-```bash
-#!/usr/bin/env bash
-# scripts/gen_report_html.sh
-ts=$(date -u +%Y%m%d-%H%M%S)
-report=artifacts/demo-$ts.html
+#### A2. 타임스탬프 기반 로그 백업 함수 세부 구현 계획
+1. 공통 유틸 스크립트에 타임스탬프 생성 함수 추가  
+2. 로그 디렉터리에 덮어쓰기 방지 로직 삽입  
+3. NDJSON 로깅 형식과 연동  
 
-# 디렉토리 생성
-mkdir -p artifacts
+#### B4. 스크립트 에러 핸들링 강화 세부 구현 계획
+1. `trap` 메커니즘으로 스크립트 종료 코드 표준화  
+2. 의존성 및 환경 사전 검증 함수 추가  
+3. 실행 로그 형식 통일 및 강화  
+4. 컨테이너 연결성(네트워크) 검증 로직 삽입  
+5. 타임아웃 및 실패 조건 세분화  
 
-cat > "$report" <<EOF
-<!DOCTYPE html>
-<html lang="en"><meta charset="utf-8">
-<title>SMTP-DNS Lab Report $ts</title>
-<style>
-body{font-family:monospace;background:#fafafa;margin:2rem;}
-h1{font-size:1.4rem;border-bottom:1px solid #555;}
-pre{background:#eee;padding:1rem;border-radius:5px;}
-</style>
-<h1>Environment</h1>
-<pre>$(docker compose ps --format table)</pre>
+### Stage 4 ― 보고서 작성 & 메트릭 (진행중)
+| #  | Task                                 | Status | Evidence/Notes                   |
+|----|-------------------------------------|--------|----------------------------------|
+| 13 | `gen_report_html.sh` 확장             | ✓      | Bulma CSS 기반                   |
+| 14 | CVSS 자동 산정 **[A5]**              | ▷      | `calc_cvss.py` 초안 (중간, 3h)    |
+| 15 | 개선 효과 계량화                       | ▷      | 성공률·응답코드 통계               |
+| 16 | SMTP 응답 코드별 카테고리화 **[A4]**    | □      | 응답 코드별 의미 분류 (중간, 2h)    |
+| 17 | Bulma 리포트 템플릿 개선 **[B5]**      | □      | 시각적 명료성 강화 (중간, 4h)      |
 
-<h1>Log diff</h1>
-<pre>$(diff -u artifacts/before.log artifacts/after.log)</pre>
+#### A4. SMTP 응답 코드별 카테고리화 세부 구현 계획
+1. `analyze_pcap.sh` 결과 기반 응답 코드 추출 스크립트 작성  
+2. 응답 코드별 의미 및 분류 테이블 생성  
+3. CSV/JSON 데이터 파일로 저장  
 
-<h1>Verdict</h1>
-<p><b>Fix ✔</b></p>
-</html>
-EOF
+#### A5. CVSS 자동 산정 세부 구현 계획
+1. CVSS 3.1 벡터 상수 정의  
+2. SMTP 오픈 릴레이 특성 자동 매핑 로직 구현  
+3. 벡터→점수 변환 및 JSON 출력 기능 구현  
+4. 리포트 생성기 연동 인터페이스 작성  
+5. 단위 테스트 케이스 작성  
 
-xdg-open "$report" 2>/dev/null || open "$report"
-```
+#### B5. Bulma 리포트 템플릿 개선 세부 구현 계획
+1. 현재 템플릿 분석 및 개선점 식별
+2. 데이터 시각화 컴포넌트 추가
+3. 테이블 및 카드 디자인 최적화
+4. 반응형 디자인 구현
+5. 테마 색상 일관성 확보
 
-### Makefile 예시
+### Stage 5 ― 패키징 & 향후 작업 (계획)
+| #  | Task                        | Status | Evidence/Notes                          |
+|----|----------------------------|--------|------------------------------------------|
+| 18 | artifacts 백업 구조           | ✓      | ISO-8601 타임스탬프 기록                  |
+| 19 | `Makefile` 타깃 세분화 **[A3]** | □     | `demo-before`/`demo-after`/`report` (중간, 1h) |
+| 20 | 위협 모델 (Mermaid) **[B3]**   | □     | ATT&CK view 예정 (중간, 3h)              |
+| 21 | `main.cf` diff 리포트 **[B1]** | □     | side-by-side HTML (중간, 4h, 선행: A1)   |
+| 22 | SMTP 시퀀스 다이어그램 **[B2]**  | □     | Mermaid sequence (낮음, 3h)              |
+| 23 | DNS 재귀 질의 기본 설정 **[B6]** | □     | `dnsmasq.conf` 최적화 (낮음, 3h)         |
 
-```makefile
-# Makefile
-.PHONY: demo clean setup
+#### A3. Makefile 타깃 세분화 세부 구현 계획
+1. Makefile에 `demo-before`, `demo-after` 섹션 분리  
+2. 각 섹션 실행 흐름 검증 및 문서화  
 
-demo: setup attack-before patch attack-after report
+#### B1. `main.cf` diff 리포트 세부 구현 계획
+1. 설정 백업 완료 후 시작 가능
+2. HTML 형식 diff 시각화 구현
+3. 색상 코딩 적용 (추가/삭제/변경)
+4. 주석 및 설명 기능 추가
 
-setup:
-	@echo "=== Setting up test environment ==="
-	docker exec mua-alpine apk add --no-cache swaks
-	mkdir -p artifacts
+#### B2. SMTP 시퀀스 다이어그램 세부 구현 계획
+1. 정상 흐름 및 오픈 릴레이 케이스 식별
+2. Mermaid 구문으로 다이어그램 작성
+3. 리포트 통합
 
-attack-before:
-	@echo "=== Running attack before hardening ==="
-	docker cp scripts/attack_openrelay.sh mua-alpine:/tmp/
-	docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/before.log
-	docker cp mua-alpine:/tmp/before.log artifacts/
+#### B3. 위협 모델 다이어그램 세부 구현 계획
+1. ATT&CK 프레임워크 매핑
+2. 위협 엑터, 벡터, 완화조치 식별
+3. Mermaid 형식 다이어그램 작성
 
-patch:
-	@echo "=== Applying security patch ==="
-	docker cp scripts/harden_postfix.sh mail-postfix:/tmp/
-	docker exec mail-postfix bash /tmp/harden_postfix.sh
+#### B6. DNS 재귀 질의 설정 세부 구현 계획
+1. dnsmasq 설정 파일 분석
+2. 최적 설정 파라미터 연구
+3. 테스트 및 검증
 
-attack-after:
-	@echo "=== Running attack after hardening ==="
-	docker exec mua-alpine bash /tmp/attack_openrelay.sh /tmp/after.log
-	docker cp mua-alpine:/tmp/after.log artifacts/
+## 향후 작업: SMTP Fuzzer
 
-report:
-	@echo "=== Generating HTML report ==="
-	bash scripts/gen_report_html.sh
+| #  | Task                               | Status | Evidence/Notes                         |
+|----|-----------------------------------|--------|---------------------------------------|
+| F1 | 퍼저 아키텍처 기본 골격 설정         | □      | Python `asyncio` 기반 (중간, 2h)       |
+| F2 | 변이 전략 모듈 구현                 | □      | 명령어, 헤더, 인코딩 퍼징 (중간, 4h)     |
+| F3 | 모니터링 및 로깅 통합               | □      | 응답코드 추적, 크래시 감지 (중간, 3h)    |
+| F4 | 자동 분류 및 실패 클러스터링         | □      | 고유 실패 그룹화 (중간, 3h)             |
+| F5 | 퍼징 보고서 출력 생성기              | □      | HTML 리포트 + 재현 스크립트 (중간, 2h)   |
 
-clean:
-	@echo "=== Cleaning up ==="
-	rm -rf artifacts/*.log artifacts/*.html
-```
+## 6. 실행 순서 및 로드맵
+
+### 단기 실행 계획 `High Priorty`
+1. **[A1]** 설정 백업 메커니즘 (1h)
+2. **[A2]** 타임스탬프 기반 로그 백업 함수 (2h)
+3. **[B4]** 스크립트 에러 핸들링 강화 (4h)
+
+### 중기 실행 계획 `Mid Priorty`
+4. **[A3]** Makefile 타깃 세분화 (1h)
+5. **[A4]** SMTP 응답 코드별 카테고리화 (2h)
+6. **[A5]** CVSS 자동 산정 (3h)
+7. **[B1]** `main.cf` diff 리포트 (4h, 선행: A1)
+8. **[B5]** Bulma 리포트 템플릿 개선 (4h)
+9. **[B3]** 위협 모델 다이어그램 (3h)
+
+### 후기 실행 계획 `Low Priorty`
+10. **[B2]** SMTP 시퀀스 다이어그램 (3h)
+11. **[B6]** DNS 재귀 질의 설정 (3h)
+
+### 개발 흐름 최적화
+1. A1 → A2 → A3 → A4 → A5  
+2. B4 → B1 → B5  
+3. B2 → B3  
+4. B6  
+5. F1 → F2 → F3 → F4 → F5
+
+## 7. Post-Report: SMTP Fuzzer Tasks
+- [ ] **F1:** 퍼저 아키텍처 기본 골격 설정 (2h, 중간)  
+- [ ] **F2:** 변이 전략 모듈 구현 (4h, 중간)  
+- [ ] **F3:** 모니터링 및 로깅 통합 (3h, 중간)  
+- [ ] **F4:** 자동 분류 및 실패 클러스터링 기능 구현 (3h, 중간)  
+- [ ] **F5:** 퍼징 보고서 출력 생성기 개발 (2h, 중간)   
+
+## 8. 완료된 마일스톤 (2025-04 ~ 2025-05)
+### 주요 커밋
+| Hash      | Tag      | Message                             |
+|-----------|----------|-------------------------------------|
+| `1461927` | docs     | 실험 방향 리디자인                  |
+| `e723f45` | feat     | 네트워크 분리 & CIDR 설정            |
+| `98a71b2` | feat     | SMTP 오픈 릴레이 공격 스크립트        |
+| `d4e7f29` | feat     | HTML 리포트 생성 초안               |
+| `d0e4b5e` | refactor | tcpdump→`any` 인터페이스 개선       |
+| `b02a912` | feat     | 기본 메일 전송 스크립트               |
+
+* 컨테이너 인프라 구축 완료 (`mail-postfix`, `dns-dnsmasq`, `mua-debian`, `controller`)  
+* 엔드투엔드 자동화 (`run_experiment.sh`): 공격 → 캡처 → 하드닝 → 재테스트 → 리포트  
+* NDJSON + RFC 3339 구조화 로깅, Attack ID 상관관계  
+* 자동화된 공격 흐름: `attack_openrelay.sh` + swaks  
+* 패킷 캡처·분석: `capture_smtp.sh` + `analyze_pcap.sh`
+
+## 9. Final Deliverables
+* `report-${YYYYMMDD}.html` (비교·그래프 포함)  
+* `artifacts/` 디렉터리: PCAP, 로그, 분석 JSON, diff  
+* Makefile 단일 명령 `make demo-full` 완료 기록
+
+## 10. Revision History (key commits)
+| Hash      | Tag      | Message                             |
+|-----------|----------|-------------------------------------|
+| `1461927` | docs     | 실험 방향 리디자인                  |
+| `e723f45` | feat     | 네트워크 분리 & CIDR 설정            |
+| `98a71b2` | feat     | SMTP 오픈 릴레이 공격 스크립트        |
+| `d4e7f29` | feat     | HTML 리포트 생성 초안               |
+| `d0e4b5e` | refactor | tcpdump→`any` 인터페이스 개선       |
+| `b02a912` | feat     | 기본 메일 전송 스크립트               |
