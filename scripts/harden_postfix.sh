@@ -70,7 +70,7 @@ harden_postfix() {
   log "Postfix 보안 설정 적용 중..."
   
   # SMTP 인증 설정 강화
-  docker exec $CONTAINER_NAME postconf -e "smtpd_helo_required = yes"
+  echo "smtpd_helo_required = yes" >> /shared/postfix/main.cf
   docker exec $CONTAINER_NAME postconf -e "smtpd_delay_reject = yes"
   docker exec $CONTAINER_NAME postconf -e "disable_vrfy_command = yes"
   
@@ -88,6 +88,9 @@ harden_postfix() {
   # 하드닝 후 설정 확인
   log "설정 변경사항 확인:"
   docker exec $CONTAINER_NAME postconf | grep "security_level\|error_limit\|vrfy\|helo_required"
+  
+  # Postfix 재시작 신호 전달
+  touch /shared/postfix/restart_trigger
   
   # Postfix 재시작
   log "Postfix 서비스 재시작 중..."

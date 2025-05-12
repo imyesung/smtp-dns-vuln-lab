@@ -11,6 +11,8 @@ services:
     ports:
       - "25:25"                  # SMTP Relay
       - "587:587"                # Submission
+    volumes:
+      - postfix-config:/etc/postfix
 
   dns-dnsmasq:
     image: andyshinn/dnsmasq     # DNSMasq 공식 이미지
@@ -45,6 +47,7 @@ services:
     volumes:
       - ./scripts:/scripts
       - ./artifacts:/artifacts
+      - postfix-config:/shared/postfix
     tty: true
 
 networks:
@@ -54,3 +57,6 @@ networks:
     driver: bridge
   mgmt-net:
     driver: bridge
+
+volumes:
+  postfix-config:
