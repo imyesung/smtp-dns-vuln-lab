@@ -5,6 +5,9 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# utils.sh 함수 사용
+source "${SCRIPT_DIR}/utils.sh"
+
 # 백업 디렉토리 설정
 BACKUP_DIR="${PROJECT_ROOT}/backups/postfix"
 CONTAINER_NAME="mail-postfix"
@@ -17,11 +20,13 @@ LOG_FILE="${LOG_DIR}/postfix_backup.log"
 mkdir -p "$BACKUP_DIR"
 mkdir -p "$LOG_DIR"
 
-# 로깅 함수
+# 로그 파일 덮어쓰기 방지
+safe_logfile "$LOG_FILE"
+
+# log 함수 대체: log_ndjson 사용
 log() {
-  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  echo "[$timestamp] $1" >> "$LOG_FILE"
-  echo "[$timestamp] $1"
+  log_ndjson "$LOG_FILE" "\"$1\""
+  echo "[$(iso8601_now)] $1"
 }
 
 # 백업 함수 - 핵심 백업 기능만 담당
