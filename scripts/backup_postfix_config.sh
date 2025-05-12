@@ -76,11 +76,75 @@ backup_postfix_config() {
       docker exec $CONTAINER_NAME cat "/etc/postfix/${file}" > "${TMP_DIR}/${file}" 2>/dev/null
   done
 
+  # 중요 파일 정의
+  CRITICAL_FILES="main.cf master.cf postconf_output.txt"
+  
+  # 중요 파일 체크섬 계산 및 저장
+  log "중요 파일 체크섬 계산 중..."
+  for file in $CRITICAL_FILES; do
+    if [ -f "${TMP_DIR}/${file}" ]; then
+      # 파일명에서 . 를 _로 변환하여 변수 이름으로 사용
+      varname=$(echo "$file" | tr '.' '_')
+      eval "CHECKSUM_${varname}=$(sha256sum "${TMP_DIR}/${file}" | awk '{print $1}')"
+      log "파일 '$file' 체크섬: $(eval echo \$CHECKSUM_${varname})"
+    else
+      log "경고: 중요 파일 '$file'이 백업 소스에 없습니다"
+    fi
+  done
+
   # 백업 파일 생성
   log "백업 파일 압축 중: $BACKUP_FILE"
   tar -czf "$BACKUP_FILE" -C "$TMP_DIR" .
   if [ $? -eq 0 ]; then
     log "백업 파일 생성 성공: $BACKUP_FILE"
+    
+    # 무결성 검증 - 중요 파일만 검증
+    log "중요 파일 무결성 검증 중..."
+    VERIFY_DIR=$(mktemp -d)
+    tar -xzf "$BACKUP_FILE" -C "$VERIFY_DIR"
+    
+    # 파일 수 기본 검증 (옵션)
+    ORIG_FILES=$(find "$TMP_DIR" -type f | wc -l)
+    BACKUP_FILES=$(find "$VERIFY_DIR" -type f | wc -l)
+    
+    if [ "$ORIG_FILES" -ne "$BACKUP_FILES" ]; then
+      log "경고: 백업된 파일 수가 다릅니다 (원본: $ORIG_FILES, 백업: $BACKUP_FILES)"
+      # 경고만 하고 실패로 처리하지 않음
+    fi
+    
+    # 중요 파일 검증
+    VALIDATION_PASSED=true
+    for file in $CRITICAL_FILES; do
+      if [ -f "${TMP_DIR}/${file}" ] && [ -f "${VERIFY_DIR}/${file}" ]; then
+        # 파일명에서 . 를 _로 변환하여 변수 이름으로 사용
+        varname=$(echo "$file" | tr '.' '_')
+        HASH_AFTER=$(sha256sum "${VERIFY_DIR}/${file}" | awk '{print $1}')
+        HASH_BEFORE=$(eval echo \$CHECKSUM_${varname})
+        
+        if [ "$HASH_BEFORE" != "$HASH_AFTER" ]; then
+          log "오류: ${file} 파일 SHA-256 해시값이 일치하지 않습니다"
+          log "원본: $HASH_BEFORE"
+          log "백업: $HASH_AFTER"
+          VALIDATION_PASSED=false
+        else
+          log "검증 성공: ${file} SHA-256 해시값 일치"
+        fi
+      elif [ -f "${TMP_DIR}/${file}" ]; then
+        log "오류: ${file} 파일이 백업에 없습니다"
+        VALIDATION_PASSED=false
+      fi
+    done
+
+    if [ "$VALIDATION_PASSED" = false ]; then
+      log "오류: 주요 파일 내용 검증 실패"
+      rm -f "$BACKUP_FILE"
+      rm -rf "$TMP_DIR" "$VERIFY_DIR"
+      return 1
+    else
+      log "백업 검증 성공: 모든 중요 파일 체크섬 일치"
+    fi
+    
+    rm -rf "$VERIFY_DIR"
     
     # 백업 파일 권한 설정
     chmod 600 "$BACKUP_FILE"
