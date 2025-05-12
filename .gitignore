@@ -8,6 +8,13 @@ artifacts/*
 *.out
 *.core
 
+# 백업 및 로그 파일 제외
+/backups/
+/logs/
+
+# 사용자별 설정 파일
+/configs/private/
+
 # ───── Docker 관련 임시 파일 무시 ─────
 *.pid
 *.sock
