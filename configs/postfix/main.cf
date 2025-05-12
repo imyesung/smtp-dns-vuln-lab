@@ -20,6 +20,20 @@ smtpd_sasl_auth_enable = no
 # 수신자 도메인 무시 (실험용)
 local_recipient_maps =
 
+# 설정 파일 경로 지정 (컨테이너 내부 경로)
+config_directory = /postfix
+
+# 백업 관련 설정
+alternate_config_directories = /postfix/backup
+backup_destination = /postfix/backup/mail.test.local
+
+# 백업 권한 설정
+backup_file_perm = 0640
+
+# 로깅 세부 설정
+maillog_file = /var/log/postfix.log
+debug_peer_level = 2
+
 # 큐 디렉터리 및 기본 타입 설정
 queue_directory = /var/spool/postfix
 default_database_type = lmdb
