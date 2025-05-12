@@ -30,6 +30,8 @@ services:
     volumes:
       - ./scripts:/scripts
       - ./artifacts:/artifacts
+    tty: true
+    stdin_open: true
 
   controller:
     build: ./controller
