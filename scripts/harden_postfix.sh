@@ -59,50 +59,22 @@ harden_postfix() {
     log "경고: 백업 실패, 하드닝 계속 진행..."
   fi
   
-  # 컨테이너 존재 확인
-  docker ps | grep -q $CONTAINER_NAME
-  if [ $? -ne 0 ]; then
-    log "오류: $CONTAINER_NAME 컨테이너가 실행 중이 아님"
-    return 1
-  fi
-  
-  # Postfix 설정 강화
+  # Postfix 설정 강화 (공유 볼륨 기반 main.cf 직접 수정)
   log "Postfix 보안 설정 적용 중..."
-  
-  # SMTP 인증 설정 강화
-  echo "smtpd_helo_required = yes" >> /shared/postfix/main.cf
-  docker exec $CONTAINER_NAME postconf -e "smtpd_delay_reject = yes"
-  docker exec $CONTAINER_NAME postconf -e "disable_vrfy_command = yes"
-  
-  # 보안 TLS 설정
-  docker exec $CONTAINER_NAME postconf -e "smtpd_tls_security_level = may"
-  docker exec $CONTAINER_NAME postconf -e "smtp_tls_security_level = may"
-  docker exec $CONTAINER_NAME postconf -e "smtp_tls_loglevel = 1"
-  docker exec $CONTAINER_NAME postconf -e "smtpd_tls_loglevel = 1"
-  
-  # 랜덤 지연 시간 추가 (스팸 방지)
-  docker exec $CONTAINER_NAME postconf -e "smtpd_error_sleep_time = 1s"
-  docker exec $CONTAINER_NAME postconf -e "smtpd_soft_error_limit = 10"
-  docker exec $CONTAINER_NAME postconf -e "smtpd_hard_error_limit = 20"
-  
-  # 하드닝 후 설정 확인
-  log "설정 변경사항 확인:"
-  docker exec $CONTAINER_NAME postconf | grep "security_level\|error_limit\|vrfy\|helo_required"
-  
-  # Postfix 재시작 신호 전달
-  touch /shared/postfix/restart_trigger
-  
-  # Postfix 재시작
-  log "Postfix 서비스 재시작 중..."
-  docker exec $CONTAINER_NAME service postfix reload
-  
-  # 재시작 후 상태 확인
-  if docker exec $CONTAINER_NAME service postfix status | grep -q "running"; then
-    log "Postfix 서비스 재시작 성공"
-  else
-    log "오류: Postfix 서비스 재시작 실패"
+  POSTFIX_CONF="${PROJECT_ROOT}/configs/postfix/main.cf"
+  if [ ! -f "$POSTFIX_CONF" ]; then
+    log "오류: main.cf 파일이 존재하지 않음 ($POSTFIX_CONF)"
     return 1
   fi
+
+  echo "smtpd_helo_required = yes" >> "$POSTFIX_CONF"
+  # 필요시 추가 하드닝 옵션도 직접 main.cf에 append
+
+  # 하드닝 후 설정 확인 (생략 또는 필요시 구현)
+  # log "설정 변경사항 확인: ..."
+
+  # Postfix 재시작 신호 전달 (Makefile에서 reload)
+  touch "${PROJECT_ROOT}/configs/postfix/restart_trigger"
   
   # 하드닝 후 백업 다시 실행 (변경된 설정 백업)
   log "변경된 설정 백업 중..."

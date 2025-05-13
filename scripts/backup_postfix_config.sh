@@ -35,13 +35,6 @@ backup_postfix_config() {
   local TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
   local BACKUP_FILE="${BACKUP_DIR}/postfix_config_${TIMESTAMP}.tar.gz"
 
-  # 컨테이너 존재 확인
-  docker ps | grep -q $CONTAINER_NAME
-  if [ $? -ne 0 ]; then
-    log "오류: $CONTAINER_NAME 컨테이너가 실행 중이 아님"
-    return 1
-  fi
-
   # 임시 디렉토리 생성
   local TMP_DIR=$(mktemp -d)
   if [ $? -ne 0 ]; then
@@ -53,37 +46,37 @@ backup_postfix_config() {
   echo "백업 시간: $(date)" > "${TMP_DIR}/backup_info.txt"
   echo "컨테이너: $CONTAINER_NAME" >> "${TMP_DIR}/backup_info.txt"
 
-  # main.cf 파일 백업
+  # main.cf 파일 백업 (공유 볼륨 기반)
   log "main.cf 파일 백업 중..."
-  docker exec $CONTAINER_NAME cat /etc/postfix/main.cf > "${TMP_DIR}/main.cf" 2>/dev/null
-  if [ $? -ne 0 ]; then
-    log "경고: main.cf 파일 백업 실패"
+  if [ -f "${PROJECT_ROOT}/configs/postfix/main.cf" ]; then
+    cp "${PROJECT_ROOT}/configs/postfix/main.cf" "${TMP_DIR}/main.cf"
+  else
+    log "경고: main.cf 파일이 존재하지 않음 (공유 볼륨)"
   fi
 
-  # master.cf 파일 백업
+  # master.cf 파일 백업 (공유 볼륨 기반)
   log "master.cf 파일 백업 중..."
-  docker exec $CONTAINER_NAME cat /etc/postfix/master.cf > "${TMP_DIR}/master.cf" 2>/dev/null
-  if [ $? -ne 0 ]; then
-    log "경고: master.cf 파일 백업 실패"
+  if [ -f "${PROJECT_ROOT}/configs/postfix/master.cf" ]; then
+    cp "${PROJECT_ROOT}/configs/postfix/master.cf" "${TMP_DIR}/master.cf"
+  else
+    log "경고: master.cf 파일이 존재하지 않음 (공유 볼륨)"
   fi
 
-  # 현재 Postfix 설정 덤프
-  log "현재 Postfix 설정 덤프 중..."
-  docker exec $CONTAINER_NAME postconf > "${TMP_DIR}/postconf_output.txt" 2>/dev/null
-  if [ $? -ne 0 ]; then
-    log "경고: postconf 출력 백업 실패"
-  fi
+  # 현재 Postfix 설정 덤프 (postconf 결과는 생략 또는 필요시 구현)
+  # log "현재 Postfix 설정 덤프 중..."
+  # (컨테이너 내부 postconf 실행 불가, 필요시 별도 처리)
 
-  # 기타 중요 설정 파일 백업
+  # 기타 중요 설정 파일 백업 (공유 볼륨 기반)
   log "기타 Postfix 설정 파일 백업 중..."
   for file in aliases access canonical generic header_checks relocated transport virtual; do
-    docker exec $CONTAINER_NAME test -f "/etc/postfix/${file}" && \
-      docker exec $CONTAINER_NAME cat "/etc/postfix/${file}" > "${TMP_DIR}/${file}" 2>/dev/null
+    if [ -f "${PROJECT_ROOT}/configs/postfix/${file}" ]; then
+      cp "${PROJECT_ROOT}/configs/postfix/${file}" "${TMP_DIR}/${file}"
+    fi
   done
 
   # 중요 파일 정의
-  CRITICAL_FILES="main.cf master.cf postconf_output.txt"
-  
+  CRITICAL_FILES="main.cf master.cf"
+
   # 중요 파일 체크섬 계산 및 저장
   log "중요 파일 체크섬 계산 중..."
   for file in $CRITICAL_FILES; do
