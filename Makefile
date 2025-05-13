@@ -4,7 +4,8 @@ SHELL := /bin/bash
 COMPOSE := docker-compose
 CONTROLLER_CONTAINER := controller
 SCRIPTS_DIR := /scripts
-ARTIFACTS_DIR := /artifacts
+ARTIFACTS_DIR := /artifacts # 컨테이너 내부 경로용
+HOST_ARTIFACTS_DIR := ./artifacts # 호스트 경로용
 ATTACK_ID_PREFIX := EXP
 CURRENT_TIMESTAMP := $(shell LC_ALL=C date +%Y%m%d_%H%M%S)
 DEMO_RUN_ID := $(ATTACK_ID_PREFIX)_$(CURRENT_TIMESTAMP)
@@ -28,7 +29,7 @@ define wait_for_file
 	fi
 endef
 
-.PHONY: up down logs ps build clean-artifacts demo demo-before demo-after analyze-all help exec postfix-restore
+.PHONY: up down logs ps build clean-artifacts demo demo-before demo-after analyze-all help exec postfix-restore postfix-harden report-placeholder
 
 up:
 	@echo "INFO: Starting all Docker services..."
@@ -64,45 +65,65 @@ demo: up demo-before postfix-harden demo-after analyze-all report-placeholder po
 
 demo-before:
 	@echo "INFO: === Stage: Before Hardening (ID: $(DEMO_RUN_ID)_BEFORE) ==="
-	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch /tmp/capture_started"
-	$(call wait_for_file,/tmp/capture_started,30)
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started"
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started,30)
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE
-	$(call wait_for_file,$(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap,90)
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap,90)
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt
 	cp configs/postfix/main.cf configs/postfix/main.cf.bak
 
 postfix-restore:
 	@echo "INFO: [postfix-restore] main.cf 원본 복원 및 postfix reload"
 	if [ -f configs/postfix/main.cf.bak ]; then \
 		mv configs/postfix/main.cf.bak configs/postfix/main.cf; \
-		touch configs/postfix/NEED_RELOAD; \
 		echo "INFO: [postfix-restore] 복원 완료"; \
 	else \
 		echo "WARN: main.cf.bak 파일이 없어 복원 생략"; \
 		echo "INFO: Recreating main.cf with default content..."; \
-		cat <<EOF > configs/postfix/main.cf
+		cat <<EOF > configs/postfix/main.cf; \
 	EOF
 	# Default Postfix Configuration
 	smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination
 	smtpd_helo_required = no
 	disable_vrfy_command = no
 	EOF
-		touch configs/postfix/NEED_RELOAD; \
-		echo "INFO: Default main.cf recreated and reload trigger file created."; \
+		echo "INFO: Default main.cf recreated."; \
 	fi
+	@echo "INFO: Reloading postfix in container..."
+	docker exec mail-postfix postfix reload && \
+		echo "INFO: Postfix reload 성공" || \
+		(echo "ERROR: Postfix reload 실패"; exit 1)
+
+	# main.cf 설정 안전하게 갱신 예시
+	@echo "INFO: smtpd_helo_required 설정 갱신"
+	if grep -q '^smtpd_helo_required' configs/postfix/main.cf; then \
+		sed -i '' 's/^smtpd_helo_required.*/smtpd_helo_required = yes/' configs/postfix/main.cf; \
+	else \
+		echo "smtpd_helo_required = yes" >> configs/postfix/main.cf; \
+	fi
+
+postfix-harden:
+	@echo "INFO: Hardening Postfix..."
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/harden_postfix.sh
+	@echo "INFO: Reloading Postfix..."
+	docker exec mail-postfix postfix reload
+	@echo "INFO: Postfix hardened successfully."
 
 demo-after:
 	@echo "INFO: === Stage: After Hardening (ID: $(DEMO_RUN_ID)_AFTER) ==="
-	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch /tmp/capture_started_after"
-	$(call wait_for_file,/tmp/capture_started_after,30)
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_after"
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_after,30)
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_AFTER
-	$(call wait_for_file,$(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap,90)
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap,90)
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt
 
 analyze-all:
 	@echo "INFO: Analyzing PCAPs for BEFORE and AFTER states..."
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt
+
+report-placeholder:
+	@echo "INFO: (Placeholder) Report generation skipped or done."
 
 help:
 	@echo "Available commands:"

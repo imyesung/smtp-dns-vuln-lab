@@ -3,18 +3,22 @@
 
 # 스크립트 디렉토리 설정 (상대 경로 사용)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# PROJECT_ROOT는 컨테이너 내부에서는 / 이므로 직접 경로를 지정하는 것이 더 안전합니다.
 
 # utils.sh 함수 사용
 source "${SCRIPT_DIR}/utils.sh"
 
-# 백업 디렉토리 설정
-BACKUP_DIR="${PROJECT_ROOT}/backups/postfix"
-CONTAINER_NAME="mail-postfix"
+# 백업 디렉토리 설정 - /artifacts 하위로 변경하여 호스트와 공유
+BACKUP_DIR="/artifacts/backups/postfix"
+# CONTAINER_NAME="mail-postfix" # 사용되지 않음
 
-# 로그 디렉토리 및 파일 설정
-LOG_DIR="${PROJECT_ROOT}/logs"
+# 로그 디렉토리 및 파일 설정 - /artifacts 하위로 변경
+LOG_DIR="/artifacts/logs"
 LOG_FILE="${LOG_DIR}/postfix_backup.log"
+
+# Postfix 설정 파일이 위치한 controller 컨테이너 내 경로
+POSTFIX_CONF_DIR_IN_CONTROLLER="/shared/postfix"
+
 
 # 디렉토리 확인 및 생성
 mkdir -p "$BACKUP_DIR"
@@ -44,38 +48,40 @@ backup_postfix_config() {
 
   # 백업 정보 파일 생성
   echo "백업 시간: $(date)" > "${TMP_DIR}/backup_info.txt"
-  echo "컨테이너: $CONTAINER_NAME" >> "${TMP_DIR}/backup_info.txt"
+  # echo "컨테이너: $CONTAINER_NAME" >> "${TMP_DIR}/backup_info.txt" # 이 정보는 controller에서 실행되므로 의미가 다를 수 있음
 
   # main.cf 파일 백업 (공유 볼륨 기반)
-  log "main.cf 파일 백업 중..."
-  if [ -f "${PROJECT_ROOT}/configs/postfix/main.cf" ]; then
-    cp "${PROJECT_ROOT}/configs/postfix/main.cf" "${TMP_DIR}/main.cf"
+  log "main.cf 파일 백업 중 (${POSTFIX_CONF_DIR_IN_CONTROLLER}/main.cf)..."
+  if [ -f "${POSTFIX_CONF_DIR_IN_CONTROLLER}/main.cf" ]; then
+    cp "${POSTFIX_CONF_DIR_IN_CONTROLLER}/main.cf" "${TMP_DIR}/main.cf"
   else
-    log "경고: main.cf 파일이 존재하지 않음 (공유 볼륨)"
+    log "경고: main.cf 파일이 존재하지 않음 (${POSTFIX_CONF_DIR_IN_CONTROLLER}/main.cf)"
   fi
 
   # master.cf 파일 백업 (공유 볼륨 기반)
-  log "master.cf 파일 백업 중..."
-  if [ -f "${PROJECT_ROOT}/configs/postfix/master.cf" ]; then
-    cp "${PROJECT_ROOT}/configs/postfix/master.cf" "${TMP_DIR}/master.cf"
+  log "master.cf 파일 백업 중 (${POSTFIX_CONF_DIR_IN_CONTROLLER}/master.cf)..."
+  if [ -f "${POSTFIX_CONF_DIR_IN_CONTROLLER}/master.cf" ]; then
+    cp "${POSTFIX_CONF_DIR_IN_CONTROLLER}/master.cf" "${TMP_DIR}/master.cf"
   else
-    log "경고: master.cf 파일이 존재하지 않음 (공유 볼륨)"
+    log "경고: master.cf 파일이 존재하지 않음 (${POSTFIX_CONF_DIR_IN_CONTROLLER}/master.cf)"
   fi
 
-  # 현재 Postfix 설정 덤프 (postconf 결과는 생략 또는 필요시 구현)
+  # 현재 Postfix 설정 덤프 (postconf 결과는 mail-postfix 컨테이너에서 가져와야 함)
   # log "현재 Postfix 설정 덤프 중..."
-  # (컨테이너 내부 postconf 실행 불가, 필요시 별도 처리)
+  # docker exec mail-postfix postconf -n > "${TMP_DIR}/postconf_output.txt"
+  # 위 방식은 이 스크립트가 controller에서 실행되므로, mail-postfix에 접근하려면 docker exec 필요.
+  # 단순화를 위해 이 단계는 생략하거나, Makefile에서 별도로 처리하는 것을 고려.
 
   # 기타 중요 설정 파일 백업 (공유 볼륨 기반)
-  log "기타 Postfix 설정 파일 백업 중..."
+  log "기타 Postfix 설정 파일 백업 중 (${POSTFIX_CONF_DIR_IN_CONTROLLER}/)..."
   for file in aliases access canonical generic header_checks relocated transport virtual; do
-    if [ -f "${PROJECT_ROOT}/configs/postfix/${file}" ]; then
-      cp "${PROJECT_ROOT}/configs/postfix/${file}" "${TMP_DIR}/${file}"
+    if [ -f "${POSTFIX_CONF_DIR_IN_CONTROLLER}/${file}" ]; then
+      cp "${POSTFIX_CONF_DIR_IN_CONTROLLER}/${file}" "${TMP_DIR}/${file}"
     fi
   done
 
   # 중요 파일 정의
-  CRITICAL_FILES="main.cf master.cf"
+  CRITICAL_FILES="main.cf master.cf" # postconf_output.txt는 현재 생성 안 함
 
   # 중요 파일 체크섬 계산 및 저장
   log "중요 파일 체크섬 계산 중..."
@@ -86,7 +92,7 @@ backup_postfix_config() {
       eval "CHECKSUM_${varname}=$(sha256sum "${TMP_DIR}/${file}" | awk '{print $1}')"
       log "파일 '$file' 체크섬: $(eval echo \$CHECKSUM_${varname})"
     else
-      log "경고: 중요 파일 '$file'이 백업 소스에 없습니다"
+      log "경고: 중요 파일 '$file'이 백업 소스에 없습니다 (${TMP_DIR}/${file})"
     fi
   done
 
@@ -127,19 +133,20 @@ backup_postfix_config() {
         else
           log "검증 성공: ${file} SHA-256 해시값 일치"
         fi
-      elif [ -f "${TMP_DIR}/${file}" ]; then
-        log "오류: ${file} 파일이 백업에 없습니다"
+      elif [ -f "${TMP_DIR}/${file}" ]; then # 원본은 있었는데 백업에 없는 경우
+        log "오류: ${file} 파일이 백업 압축 해제 후 없습니다 (${VERIFY_DIR}/${file})"
         VALIDATION_PASSED=false
+      # else # 원본 파일 자체가 없었던 경우는 위에서 이미 경고했으므로, 여기서는 검증 실패로 처리하지 않음
       fi
     done
 
     if [ "$VALIDATION_PASSED" = false ]; then
       log "오류: 주요 파일 내용 검증 실패"
-      rm -f "$BACKUP_FILE"
+      rm -f "$BACKUP_FILE" # 실패한 백업 파일 삭제
       rm -rf "$TMP_DIR" "$VERIFY_DIR"
       return 1
     else
-      log "백업 검증 성공: 모든 중요 파일 체크섬 일치"
+      log "백업 검증 성공: 모든 (존재하는) 중요 파일 체크섬 일치"
     fi
     
     rm -rf "$VERIFY_DIR"
@@ -149,6 +156,7 @@ backup_postfix_config() {
     
     # 오래된 백업 정리 (15일 이상 지난 백업 삭제)
     find "$BACKUP_DIR" -name "postfix_config_*.tar.gz" -type f -mtime +15 -delete
+    log "오래된 백업 정리 완료 (15일 초과)"
     
     # 임시 디렉토리 정리
     rm -rf "$TMP_DIR"

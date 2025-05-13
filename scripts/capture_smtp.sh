@@ -11,8 +11,9 @@ fi
 INTERFACE="any"  # 네트워크 인터페이스
 TARGET="mail-postfix"
 PORT=25
-LOG_DIR="/artifacts"
-PCAP_FILE="${LOG_DIR}/smtp_${ATTACK_ID}.pcap"
+LOG_DIR="/artifacts"  # 로그 파일 및 capture_started 플래그에 사용
+# PCAP_FILE 경로를 명시적으로 /artifacts로 시작하도록 수정
+PCAP_FILE="/artifacts/smtp_${ATTACK_ID}.pcap"
 LOG_FILE="${LOG_DIR}/tcpdump_${ATTACK_ID}.log"
 
 # 로그 디렉토리 생성
@@ -40,8 +41,13 @@ FILTER="port 25 or port 465 or port 587"
 # 실행 명령 로깅 수정
 echo "실행 명령: tcpdump -i $INTERFACE -nn -s0 -vvv '$FILTER' -w $PCAP_FILE" | tee -a "$LOG_FILE"
 
-# tcpdump 실행 (백그라운드) - 호스트명 필터 대신 포트만 사용
-tcpdump -i "$INTERFACE" -nn -s0 -vvv "$FILTER" -w "$PCAP_FILE" 2>> "$LOG_FILE" &
+# tcpdump 실행 (백그라운드)
+tcpdump -i "$INTERFACE" -nn -s0 -vvv "$FILTER" -w "$PCAP_FILE" &
+sleep 1
+# capture_started 플래그 파일은 LOG_DIR을 사용하여 /artifacts 내에 생성
+touch "${LOG_DIR}/capture_started"
+echo "캡처 시작 플래그 파일 생성: ${LOG_DIR}/capture_started" | tee -a "$LOG_FILE"
+echo "캡처 PCAP 저장 위치: $PCAP_FILE" | tee -a "$LOG_FILE"
 TCPDUMP_PID=$!
 
 echo "패킷 캡처 시작됨 (PID: $TCPDUMP_PID)" | tee -a "$LOG_FILE"

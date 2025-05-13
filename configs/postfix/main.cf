@@ -21,7 +21,7 @@ smtpd_sasl_auth_enable = no
 local_recipient_maps =
 
 # 설정 파일 경로 지정 (컨테이너 내부 경로)
-config_directory = /postfix
+config_directory = /etc/postfix
 
 # 백업 관련 설정
 alternate_config_directories = /postfix/backup
