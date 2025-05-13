@@ -46,6 +46,10 @@ make demo
 make demo          # 전체 흐름 1-클릭 실행
 make report        # 보고서만 재생성
 
+# Postfix 하드닝/복구 수동 실행
+make postfix-harden    # main.cf에 보안 옵션 적용 및 postfix reload
+make postfix-restore   # main.cf 원본 복구 및 postfix reload
+
 # 심화 환경(포트 매핑 포함)
 make full          # docker-compose.full.yml 사용
 
