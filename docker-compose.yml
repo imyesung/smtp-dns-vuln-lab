@@ -1,24 +1,35 @@
 # docker-compose.yml
 services:
   mail-postfix:
-    image: boky/postfix          
+    image: boky/postfix
+    platform: linux/amd64
     container_name: mail-postfix
+    hostname: mail.local
     environment:
       - ALLOW_EMPTY_SENDER_DOMAINS=yes
       - SMTP_SERVER_HOSTNAME=mail.local
     networks:
       - smtp-net
+    dns:
+      - 172.28.0.253
     ports:
-      - "25:25"                  # SMTP Relay
-      - "587:587"                # Submission
+      - "25:25"
+      - "587:587"
     volumes:
-      - postfix-config:/etc/postfix
+      - ./configs/postfix/main.cf:/etc/postfix/main.cf
+      - ./configs/postfix/master.cf:/etc/postfix/master.cf
+      - ./scripts:/scripts
+      - ./artifacts:/artifacts
+    entrypoint: ["postfix","start-fg"]    # /run.sh 대신 직접 foreground 모드로 실행
 
   dns-dnsmasq:
     image: andyshinn/dnsmasq     # DNSMasq 공식 이미지
     container_name: dns-dnsmasq
     platform: linux/amd64
     command: ["-k"]              # 포그라운드 모드
+    networks:
+      smtp-net: # smtp-net에 고정 IP 할당
+        ipv4_address: 172.28.0.253
     ports:
       - "53:53/udp"              # DNS
 
@@ -29,11 +40,18 @@ services:
       dockerfile: mua.Dockerfile
     networks:
       - smtp-net
+    dns:
+      - 172.28.0.253 # dns-dnsmasq의 고정 IP로 변경
     volumes:
       - ./scripts:/scripts
       - ./artifacts:/artifacts
     tty: true
     stdin_open: true
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 60s
+      timeout: 5s
+      retries: 2
 
   controller:
     build: ./controller
@@ -44,19 +62,26 @@ services:
     networks:
       - default
       - smtp-net
+    dns:
+      - 172.28.0.253
     volumes:
       - ./scripts:/scripts
       - ./artifacts:/artifacts
-      - postfix-config:/shared/postfix
+      - ./configs/postfix:/shared/postfix # 호스트 설정 바인드
     tty: true
+    healthcheck:
+      test: ["CMD","true"]
+      interval: 60s
+      timeout: 5s
+      retries: 2
 
 networks:
   smtp-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
   dns-net:
     driver: bridge
   mgmt-net:
     driver: bridge
-
-volumes:
-  postfix-config:
