@@ -1,13 +1,11 @@
 # docker-compose.yml
 services:
   mail-postfix:
-    image: boky/postfix
-    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: postfix.Dockerfile
     container_name: mail-postfix
     hostname: mail.local
-    environment:
-      - ALLOW_EMPTY_SENDER_DOMAINS=yes
-      - SMTP_SERVER_HOSTNAME=mail.local
     networks:
       - smtp-net
     dns:
@@ -16,11 +14,9 @@ services:
       - "25:25"
       - "587:587"
     volumes:
-      - ./configs/postfix/main.cf:/etc/postfix/main.cf
-      - ./configs/postfix/master.cf:/etc/postfix/master.cf
+      - ./configs/postfix:/etc/postfix
       - ./scripts:/scripts
       - ./artifacts:/artifacts
-    entrypoint: ["postfix","start-fg"]    # /run.sh 대신 직접 foreground 모드로 실행
 
   dns-dnsmasq:
     image: andyshinn/dnsmasq     # DNSMasq 공식 이미지
@@ -49,9 +45,10 @@ services:
     stdin_open: true
     healthcheck:
       test: ["CMD", "true"]
-      interval: 60s
+      interval: 5s
       timeout: 5s
       retries: 2
+      start_period: 3s
 
   controller:
     build: ./controller
@@ -70,10 +67,11 @@ services:
       - ./configs/postfix:/shared/postfix # 호스트 설정 바인드
     tty: true
     healthcheck:
-      test: ["CMD","true"]
-      interval: 60s
+      test: ["CMD", "true"]
+      interval: 5s  # 60초에서 5초로 줄임
       timeout: 5s
       retries: 2
+      start_period: 3s  # 시작 후 초기 대기 시간 추가
 
 networks:
   smtp-net:

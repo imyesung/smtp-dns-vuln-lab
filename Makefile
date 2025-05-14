@@ -143,7 +143,7 @@ demo-before:
 	cp configs/postfix/main.cf configs/postfix/main.cf.bak
 
 postfix-restore:
-	@echo "INFO: [postfix-restore] main.cf 원본 복원 및 postfix reload"
+	@echo "INFO: [postfix-restore] main.cf 원본 복원 및 postfix 재시작"
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 	if [ -f configs/postfix/main.cf.bak ]; then \
 		mv configs/postfix/main.cf.bak configs/postfix/main.cf; \
@@ -157,32 +157,26 @@ postfix-restore:
 		echo "disable_vrfy_command = no" >> configs/postfix/main.cf; \
 		echo "INFO: Default main.cf recreated."; \
 	fi
-	@echo "INFO: Reloading postfix in container..."
-	@docker exec $(MAIL_SERVER_CONTAINER) postfix reload && \
-		echo "INFO: Postfix reload 성공" || \
-		(echo "ERROR: Postfix reload 실패. Check $(MAIL_SERVER_CONTAINER) container logs."; exit 1)
+	@echo "INFO: Restarting postfix container..."
+	@docker restart $(MAIL_SERVER_CONTAINER) && \
+		echo "INFO: Postfix container 재시작 성공" || \
+		(echo "ERROR: Postfix container 재시작 실패."; exit 1)
+	@echo "INFO: Waiting for container to be responsive again..."
+	@sleep 5
+	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 
 postfix-harden:
 	@echo "INFO: Hardening Postfix..."
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/harden_postfix.sh
-	@echo "INFO: Reloading Postfix..."
-	@echo "INFO: Attempting postfix reload... Waiting for Postfix service to be ready..."
-	@timeout=30; \
-	counter=0; \
-	until docker exec $(MAIL_SERVER_CONTAINER) postfix status >/dev/null 2>&1; do \
-		if [ $$counter -ge $$timeout ]; then \
-			echo "ERROR: Timed out waiting for Postfix service in $(MAIL_SERVER_CONTAINER)."; \
-			exit 1; \
-		fi; \
-		counter=$$((counter + 1)); \
-		sleep 1; \
-	done; \
-	echo "INFO: Postfix service is ready. Proceeding with reload."
-	@docker exec $(MAIL_SERVER_CONTAINER) postfix reload && \
-		echo "INFO: Postfix reload 성공" || \
-		(echo "ERROR: Postfix reload 실패. Check $(MAIL_SERVER_CONTAINER) container logs."; exit 1)
+	@echo "INFO: Restarting Postfix container to apply changes..."
+	@docker restart $(MAIL_SERVER_CONTAINER) && \
+		echo "INFO: Postfix container 재시작 성공" || \
+		(echo "ERROR: Postfix container 재시작 실패."; exit 1)
+	@echo "INFO: Waiting for container to be responsive again..."
+	@sleep 5
+	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 	@echo "INFO: Postfix hardened successfully."
 
 demo-after:
