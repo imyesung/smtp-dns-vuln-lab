@@ -1,0 +1,62 @@
+# Standard locations of Postfix-specific files
+#
+# Do not change the comment field in the first column.
+# Otherwise the file will fail the "postfix check" command. To disable a
+# line, replace the path with the text string "no".
+#
+# Note: the entries with owner=root and group=postfix have mode=0750 so
+# that the postfix user can access them, but not regular users.
+#
+# Non-Postfix configuration files
+#
+# $config_directory: /etc/postfix
+# $daemon_directory: /usr/lib/postfix/sbin
+# $command_directory: /usr/lib/postfix/sbin
+$queue_directory: /var/spool/postfix
+$data_directory: /var/lib/postfix
+$mail_owner: postfix
+$setgid_group: postdrop
+$sample_directory: /etc/postfix
+$readme_directory: no
+$html_directory: no
+$sendmail_path: /usr/sbin/sendmail
+$mailq_path: /usr/bin/mailq
+$newaliases_path: /usr/bin/newaliases
+#
+# Aliases database
+#
+$alias_database: lmdb:/etc/aliases
+$alias_maps: lmdb:/etc/aliases
+#
+# Specific mail delivery instructions
+#
+$forward_path: $home/.forward${recipient_delimiter}${extension}, $home/.forward
+#
+# Specific address rewriting instruction
+#
+$relocated_maps: lmdb:$config_directory/relocated
+#
+# Local user delivery lookup table
+#
+$local_recipient_maps: proxy:unix:passwd.byname $alias_maps
+#
+# Virtual mailbox domain lookup table
+#
+$virtual_mailbox_domains: $virtual_mailbox_maps
+#
+# Virtual alias domain lookup table
+#
+$virtual_alias_domains: $virtual_alias_maps
+#
+# Full path to the default final mail delivery agent (LDA)
+#
+$mailbox_command:
+#
+# Shell username and command for mail commands
+#
+$mail_name: Postfix
+#
+# Full path to command that is executed at the arrival of
+# undeliverable mail. 
+#
+$bounce_notice_recipient: postmaster
