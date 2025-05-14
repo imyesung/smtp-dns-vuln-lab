@@ -1,6 +1,6 @@
 # ───── 프로젝트 산출물 무시 ─────
 artifacts/*
-!artifacts/README.md        # 예: artifacts 내 문서 유지용
+!artifacts/README.md
 
 *.log
 *.pcap
@@ -8,48 +8,45 @@ artifacts/*
 *.out
 *.core
 
-# 백업 및 로그 파일 제외
+# ───── 백업 및 로그 파일 무시 ─────
 /backups/
-/logs/
+logs/*
+!logs/.keep
 
-# 사용자별 설정 파일
+# ───── 사용자별 설정 파일 무시 ─────
 /configs/private/
 
-# ───── Docker 관련 임시 파일 무시 ─────
+# ───── Docker 임시 파일 무시 ─────
 *.pid
 *.sock
 
-# ───── Python 관련 무시 항목 ─────
+# ───── Python 캐시 무시 ─────
 __pycache__/
 *.py[cod]
 *.pyo
 *.egg-info/
 
-# ───── 편집기 및 OS ─────
+# ───── 에디터 및 OS 메타데이터 무시 ─────
 .DS_Store
 *.swp
 *.swo
 .idea/
 .vscode/
 
-# ───── 테스트 전용 스크립트 무시 (선택적으로 반영) ─────
+# ───── 테스트 및 디버깅 스크립트 무시 ─────
 scripts/test_*.sh
 scripts/debug_*.sh
 
-# ───── mail log 디렉터리 하위만 무시 ─────
-logs/*
-!logs/.keep                 # 디렉터리 구조만 유지할 때
-
-# ───── 환경 변수 파일 예외처리 ─────
+# ───── 환경 변수 파일 무시 ─────
 .env
 .env.*
 
-# ───── 무조건 남길 파일들 예외처리 ─────
+# ───── 필수 파일 보존 ─────
 !scripts/sendmail.sh
 !scripts/fetchmail.sh
 !Makefile
 !docker-compose.yml
-!config/
+!configs/
 !docs/
 !README.md
 !lab-notebook.md
