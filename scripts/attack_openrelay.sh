@@ -54,6 +54,7 @@ SWAKS_OPTS=(
   --hide-all
   --protocol SMTP 
   --tls-optional
+  --verbose # 상세 출력을 위한 옵션 추가
 )
 
 # show-raw-message 옵션 호환성 확인
