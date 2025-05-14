@@ -1,7 +1,7 @@
 # SMTP & DNS Vulnerability Lab – Progress Notebook
 *Last updated: 2025-05-12*
 
-<https://publish.obsidian.md/imyesung/smtp-dns-vuln-lab/index>
+<https://publish.obsidian.md/imyesung/smtp-dns-vuln-lab/project-overview>
 
 ## 1. Project Objective
 이메일 전송 인프라(`Postfix` + `DNSMasq`)를 **로컬 Docker** 환경에 재현하고, SMTP 오픈 릴레이 등 구조적 취약점을 실험·분석·대응한다.  
