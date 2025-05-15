@@ -14,7 +14,7 @@ services:
       - "25:25"
       - "587:587"
     volumes:
-      - ./configs/postfix:/etc/postfix
+      - ./configs/postfix:/postfix
       - ./scripts:/scripts
       - ./artifacts:/artifacts
 
