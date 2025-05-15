@@ -1,4 +1,5 @@
 #!/bin/bash
+set -x # 실행되는 모든 명령어를 터미널에 출력
 
 # 인자로 ATTACK_ID 받기
 ATTACK_ID="$1"
@@ -74,16 +75,12 @@ echo "$NC_TEST_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
 SWAKS_OPTS=(
   --to "$TO"
   --from "$FROM"
-  --server "$TARGET"
-  --port "$PORT"
-  --auth-user ""
-  --auth-password ""
+  --server "$TARGET" # TARGET 변수에는 호스트명만 포함되어야 합니다.
+  --port "$PORT"   # PORT 변수에는 포트 번호만 포함되어야 합니다.
   --timeout 10
   --header "Subject: $SUBJECT"
   --body "$BODY"
-  --hide-all
   --protocol SMTP
-  --tls-optional
 )
 
 # --verbose 지원 여부 검사 후 추가
@@ -96,10 +93,13 @@ if swaks --help 2>&1 | grep -q -- "--show-raw-message"; then
   SWAKS_OPTS+=("--show-raw-message")
 fi
 
+echo "DEBUG: SWAKS_OPTS array: ${SWAKS_OPTS[@]}" # SWAKS_OPTS 배열 내용 확인
+echo "DEBUG: About to run swaks command..."
 # swaks 실행
 SWAKS_OUTPUT_FILE=$(mktemp "${LOG_DIR}/swaks_raw_${ATTACK_ID}_XXXXXX.tmp")
 swaks "${SWAKS_OPTS[@]}" > "$SWAKS_OUTPUT_FILE" 2>&1
 EXIT_CODE=$?
+echo "DEBUG: swaks command finished with exit code: $EXIT_CODE"
 
 # swaks 출력 처리
 SWAKS_RAW_OUTPUT=$(awk '{printf "%s\\n", $0}' "$SWAKS_OUTPUT_FILE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | sed '$ s/\\n$//')
