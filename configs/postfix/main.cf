@@ -1,47 +1,52 @@
-# 기본 호스트명 설정
+# 기본 설정
 myhostname = mail.test.local
+mydomain = test.local
+myorigin = $mydomain
+inet_interfaces = all
+mydestination = $myhostname, localhost.$mydomain, localhost, $mydomain
+mynetworks = 0.0.0.0/0
 
-# 수신 허용 도메인 (loop 방지 핵심)
-mydestination = $myhostname, localhost, localhost.localdomain, test.local
+# 릴레이 설정 (오픈 릴레이 허용)
+smtpd_relay_restrictions = permit
+relay_domains = *
 
-# 내부 네트워크에서만 메일 전송 허용
-mynetworks = 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-
-# TLS 설정 (옵션)
-smtp_tls_security_level = may
-smtpd_tls_security_level = may
-
-# 메시지 크기 제한 해제
-message_size_limit = 0
-
-# 인증 필요 없음
-smtpd_sasl_auth_enable = no
-
-# 수신자 도메인 무시 (실험용)
+# 수신자 검증 비활성화
 local_recipient_maps =
 
-# 설정 파일 경로 지정 (컨테이너 내부 경로)
-# config_directory = /etc/postfix
+# 로깅 설정
+maillog_file = /dev/stdout
+debug_peer_level = 2
 
-# 백업 관련 설정 - 오류를 일으키므로 주석 처리
-# alternate_config_directories = /postfix/backup
-# backup_destination = /postfix/backup/mail.test.local
-# backup_file_perm = 0640
+# 기타 설정
+smtpd_helo_required = no
+disable_vrfy_command = no
+smtpd_banner = $myhostname ESMTP Postfix (Debian/GNU)
+
+# 큐 디렉터리 및 기본 타입 설정
+queue_directory = /var/spool/postfix
+default_database_type = lmdb
+
+# 로깅
+syslog_name = postfix
+
+# 기본 별명 맵
+alias_maps = lmdb:/etc/aliases
+alias_database = lmdb:/etc/aliases
 
 # 로깅 세부 설정
-maillog_file = /var/log/postfix.log
+maillog_file = /dev/stdout
 debug_peer_level = 2
 
 # 큐 디렉터리 및 기본 타입 설정
 queue_directory = /var/spool/postfix
 default_database_type = lmdb
 
-# 필수 ALLOW 설정 (컨테이너 실행을 위해 필요)
-# 이건 docker-compose.yml에서 환경변수로 설정되므로 여기에는 없어도 됨
-# ALLOW_EMPTY_SENDER_DOMAINS = yes
-
 # 로깅
 syslog_name = postfix
+
+# 기본 별명 맵
+alias_maps = lmdb:/etc/aliases
+alias_database = lmdb:/etc/aliases
 
 # 기본 수신 유저 (bounce 에러 회피용)
 alias_maps = lmdb:/etc/aliases
