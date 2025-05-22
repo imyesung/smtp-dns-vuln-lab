@@ -10,6 +10,7 @@ fi
 
 # 설정 변수
 TARGET="mail-postfix"
+TARGET_IP="172.28.0.3"  # mail-postfix 컨테이너의 고정 IP
 PORT=25
 FROM="attacker@example.com"
 TO="victim@example.com"
@@ -71,16 +72,17 @@ EOF
 )
 echo "$NC_TEST_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
 
-# 기본 옵션 선언
+# 기본 옵션 선언 - DNS 조회 문제 해결을 위해 IP 주소 사용
 SWAKS_OPTS=(
   --to "$TO"
   --from "$FROM"
-  --server "$TARGET" # TARGET 변수에는 호스트명만 포함되어야 합니다.
-  --port "$PORT"   # PORT 변수에는 포트 번호만 포함되어야 합니다.
+  --server "$TARGET_IP" # IP 주소 직접 사용
+  --port "$PORT"
   --timeout 10
   --header "Subject: $SUBJECT"
   --body "$BODY"
   --protocol SMTP
+  --suppress-data  # DATA 명령 후 메일 본문 전송 억제 (빠른 테스트용)
 )
 
 # --verbose 지원 여부 검사 후 추가
