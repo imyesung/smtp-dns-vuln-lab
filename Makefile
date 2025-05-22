@@ -125,11 +125,12 @@ demo-before:
 	@echo "INFO: === Stage: Before Hardening (ID: $(DEMO_RUN_ID)_BEFORE) ==="
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 	$(call ensure_container_running,$(MUA_CONTAINER))
-	docker exec $(MAIL_SERVER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started"
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started"
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started,30)
 	sleep 3
-	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE
-	docker exec $(MAIL_SERVER_CONTAINER) bash -c "if [ -f /tmp/capture.pid ]; then kill \$$(cat /tmp/capture.pid); rm /tmp/capture.pid; fi"
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE || echo "WARNING: Attack script failed, but continuing with demo..."
+	docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/capture.pid ]; then kill \$$(cat /tmp/capture.pid); rm /tmp/capture.pid; fi"
 	sleep 5
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap,90)
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt
@@ -163,11 +164,12 @@ demo-after:
 	@echo "INFO: === Stage: After Hardening (ID: $(DEMO_RUN_ID)_AFTER) ==="
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 	$(call ensure_container_running,$(MUA_CONTAINER))
-	docker exec $(MAIL_SERVER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_after"
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_after"
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_after,30)
 	sleep 3
-	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_AFTER
-	docker exec $(MAIL_SERVER_CONTAINER) bash -c "if [ -f /tmp/capture.pid ]; then kill \$$(cat /tmp/capture.pid); rm /tmp/capture.pid; fi"
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_AFTER || echo "WARNING: Attack script failed, but continuing with demo..."
+	docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/capture.pid ]; then kill \$$(cat /tmp/capture.pid); rm /tmp/capture.pid; fi"
 	sleep 5
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap,90)
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt
