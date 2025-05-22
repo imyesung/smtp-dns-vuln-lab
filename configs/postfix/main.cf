@@ -4,14 +4,20 @@ mydomain = test.local
 myorigin = $mydomain
 inet_interfaces = all
 mydestination = $myhostname, localhost.$mydomain, localhost, $mydomain
-mynetworks = 0.0.0.0/0
+mynetworks = 172.28.0.0/24, 127.0.0.0/8
 
 # 릴레이 설정 (오픈 릴레이 허용)
 smtpd_relay_restrictions = permit
 relay_domains = *
 
-# 수신자 검증 비활성화
+# 수신자 검증 비활성화 (DNS 조회 문제 해결)
 local_recipient_maps =
+unknown_local_recipient_reject_code = 550
+
+# DNS 관련 설정
+disable_dns_lookups = yes
+smtp_host_lookup = native
+smtp_dns_lookup_timeout = 10s
 
 # 로깅 설정
 maillog_file = /dev/stdout
