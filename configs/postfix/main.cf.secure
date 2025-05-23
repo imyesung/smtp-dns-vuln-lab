@@ -1,0 +1,58 @@
+# Postfix main configuration for SECURE (hardened) setup
+
+# 기본 설정
+myhostname = localhost
+mydomain = example.com
+myorigin = $mydomain
+
+# 네트워크 설정
+inet_interfaces = all
+inet_protocols = ipv4
+
+# ==== SECURE SETTINGS (HARDENED) ====
+# 신뢰할 수 있는 네트워크에서만 릴레이 허용
+mynetworks = 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+
+# 로컬 도메인에 대해서만 메일 수신
+relay_domains = $mydomain
+
+# 엄격한 수신자 제한
+smtpd_recipient_restrictions = 
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    reject_unauth_destination,
+    permit
+
+# 발신자 제한
+smtpd_sender_restrictions = 
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    permit
+
+# 클라이언트 제한
+smtpd_client_restrictions = 
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    permit
+
+# HELO 제한
+smtpd_helo_restrictions = 
+    permit_mynetworks,
+    permit_sasl_authenticated,
+    permit
+
+# ==== END SECURE SETTINGS ====
+
+# 기본 운영 설정
+alias_maps = hash:/etc/aliases
+alias_database = hash:/etc/aliases
+message_size_limit = 10240000
+mailbox_size_limit = 51200000
+recipient_delimiter = +
+
+# 로깅
+mail_log_file = /var/log/postfix.log
+
+# DNS 조회 비활성화 (격리된 환경에서 안정성을 위해)
+disable_dns_lookups = yes
+smtp_dns_support_level = disabled
