@@ -87,6 +87,21 @@ define wait_for_file
 	fi
 endef
 
+# Postfix 서비스 대기 함수
+wait_for_postfix:
+	@echo "INFO: Waiting for Postfix service..."
+	@for i in $$(seq 1 60); do \
+		if docker exec mail-postfix netstat -tuln | grep ':25 ' >/dev/null 2>&1; then \
+			echo "INFO: Postfix ready after $$i seconds"; \
+			sleep 2; \
+			exit 0; \
+		fi; \
+		echo "INFO: Waiting for Postfix... ($$i/60)"; \
+		sleep 1; \
+	done; \
+	echo "ERROR: Postfix not ready after 60 seconds"; \
+	exit 1
+
 .PHONY: up down logs ps build clean-artifacts demo demo-before demo-after analyze-all help exec postfix-restore postfix-harden generate-report
 
 up:
@@ -124,54 +139,59 @@ demo: up demo-before postfix-harden demo-after analyze-all generate-report postf
 demo-before:
 	@echo "INFO: === Stage: Before Hardening (ID: $(DEMO_RUN_ID)_BEFORE) ==="
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
+	$(MAKE) wait_for_postfix
 	$(call ensure_container_running,$(MUA_CONTAINER))
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
-	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started"
-	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started,30)
-	sleep 3
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_before"
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_before,30)
+	@echo "INFO: Waiting 5 seconds for tcpdump to stabilize..."
+	sleep 5
 	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE || echo "WARNING: Attack script failed, but continuing with demo..."
-	docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/capture.pid ]; then kill \$$(cat /tmp/capture.pid); rm /tmp/capture.pid; fi"
+	@echo "INFO: Waiting 10 seconds for traffic capture..."
+	sleep 10
+	@echo "INFO: Stopping packet capture..."
+	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid ]; then kill \$$(cat /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid; fi"
 	sleep 5
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap,90)
+	@echo "INFO: Checking PCAP file size..."
+	-ls -la $(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt
-	cp configs/postfix/main.cf configs/postfix/main.cf.bak
-
-postfix-restore:
-	@echo "INFO: Restoring Postfix configuration..."
-	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
-	if [ -f configs/postfix/main.cf.bak ]; then \
-		mv configs/postfix/main.cf.bak configs/postfix/main.cf; \
-	else \
-		echo "# Default Postfix Configuration" > configs/postfix/main.cf; \
-		echo "smtpd_recipient_restrictions = permit_mynetworks, reject_unauth_destination" >> configs/postfix/main.cf; \
-		echo "smtpd_helo_required = no" >> configs/postfix/main.cf; \
-		echo "disable_vrfy_command = no" >> configs/postfix/main.cf; \
-	fi
-	docker restart $(MAIL_SERVER_CONTAINER)
-	sleep 5
-	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 
 postfix-harden:
-	@echo "INFO: Hardening Postfix..."
+	@echo "INFO: Applying Postfix security hardening..."
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
-	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/harden_postfix.sh
-	docker restart $(MAIL_SERVER_CONTAINER)
-	sleep 5
-	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
+	docker exec $(CONTROLLER_CONTAINER) /scripts/harden_postfix.sh harden
+	@echo "INFO: Reloading Postfix with new configuration..."
+	docker exec $(MAIL_SERVER_CONTAINER) postfix reload
+	@echo "INFO: Postfix hardening completed"
+
+postfix-restore:
+	@echo "INFO: Restoring vulnerable Postfix configuration..."
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	docker exec $(CONTROLLER_CONTAINER) /scripts/harden_postfix.sh restore
+	@echo "INFO: Reloading Postfix with vulnerable configuration..."
+	docker exec $(MAIL_SERVER_CONTAINER) postfix reload
+	@echo "INFO: Vulnerable configuration restored"
 
 demo-after:
 	@echo "INFO: === Stage: After Hardening (ID: $(DEMO_RUN_ID)_AFTER) ==="
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
+	$(MAKE) wait_for_postfix
 	$(call ensure_container_running,$(MUA_CONTAINER))
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
 	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_after"
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_after,30)
-	sleep 3
+	@echo "INFO: Waiting 5 seconds for tcpdump to stabilize..."
+	sleep 5
 	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_AFTER || echo "WARNING: Attack script failed, but continuing with demo..."
-	docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/capture.pid ]; then kill \$$(cat /tmp/capture.pid); rm /tmp/capture.pid; fi"
+	@echo "INFO: Waiting 10 seconds for traffic capture..."
+	sleep 10
+	@echo "INFO: Stopping packet capture..."
+	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid ]; then kill \$$(cat /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid; fi"
 	sleep 5
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap,90)
+	@echo "INFO: Checking PCAP file size..."
+	-ls -la $(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt
 
 analyze-all:
