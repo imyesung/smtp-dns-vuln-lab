@@ -144,14 +144,14 @@ demo-before:
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
 	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_before"
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_before,30)
-	@echo "INFO: Waiting 5 seconds for tcpdump to stabilize..."
-	sleep 5
-	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE || echo "WARNING: Attack script failed, but continuing with demo..."
-	@echo "INFO: Waiting 10 seconds for traffic capture..."
+	@echo "INFO: Waiting 10 seconds for tcpdump to stabilize..."
 	sleep 10
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE
+	@echo "INFO: Waiting 15 seconds for traffic capture..."
+	sleep 15
 	@echo "INFO: Stopping packet capture..."
 	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid ]; then kill \$$(cat /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid; fi"
-	sleep 5
+	sleep 10
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap,90)
 	@echo "INFO: Checking PCAP file size..."
 	-ls -la $(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap
