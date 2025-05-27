@@ -26,7 +26,7 @@ nc -zv mail-postfix 25 -w 5
 PORT=25
 # DNS 조회 실패를 피하기 위해 로컬 도메인 사용
 FROM="attacker@external.com"
-TO="victim@localhost"  # localhost로 변경하여 DNS 조회 회피
+TO="root@localhost"  # 기존: "victim@localhost"에서 변경
 SUBJECT="Open Relay Test"
 BODY="This is an open relay test."
 LOG_DIR="/artifacts"
@@ -98,16 +98,16 @@ for attempt in {1..10}; do
     fi
 done
 
-# SWAKS 옵션 - 단순화
+# SWAKS 옵션
 SWAKS_OPTS=(
   --to "$TO"
   --from "$FROM"
   --server "$TARGET_IP"
   --port "$PORT"
-  --timeout 10
+  --timeout 30
   --header "Subject: $SUBJECT"
   --body "$BODY"
-  --quit-after "RCPT"  # RCPT TO 단계까지만 테스트
+  --suppress-data
 )
 
 echo "DEBUG: SWAKS_OPTS array: ${SWAKS_OPTS[@]}"
