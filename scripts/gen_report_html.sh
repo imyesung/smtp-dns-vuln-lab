@@ -66,16 +66,70 @@ if [ -z "$DOCKER_PS_OUTPUT" ]; then
     DOCKER_PS_OUTPUT="Docker 컨테이너 정보를 가져올 수 없습니다. Docker가 실행 중인지, 현재 디렉토리에 docker-compose.yml 파일이 있는지 확인하세요."
 fi
 
-# 강화 전/후 판단 로직 추가
-BEFORE_SMTP_CMDS_COUNT=$(grep -c "MAIL FROM\|RCPT TO\|DATA" "$BEFORE_ANALYSIS_FILE" || echo "0")
-AFTER_SMTP_CMDS_COUNT=$(grep -c "MAIL FROM\|RCPT TO\|DATA" "$AFTER_ANALYSIS_FILE" || echo "0")
+# 강화 전/후 판단 로직 개선
+BEFORE_SMTP_CMDS_COUNT=0
+AFTER_SMTP_CMDS_COUNT=0
+BEFORE_HAS_PACKETS=false
+AFTER_HAS_PACKETS=false
 
-if [ "$BEFORE_SMTP_CMDS_COUNT" -gt 0 ] && [ "$AFTER_SMTP_CMDS_COUNT" -eq 0 ]; then
+if [ -f "$BEFORE_ANALYSIS_FILE" ]; then
+    BEFORE_SMTP_CMDS_COUNT=$(grep -c "MAIL FROM\|RCPT TO\|DATA" "$BEFORE_ANALYSIS_FILE" 2>/dev/null || echo "0")
+    # 패킷이 있는지 확인
+    before_total_packets=$(grep "총 패킷 수:" "$BEFORE_ANALYSIS_FILE" | grep -o '[0-9]\+' | head -1 || echo "0")
+    [ "$before_total_packets" -gt 0 ] && BEFORE_HAS_PACKETS=true
+fi
+
+if [ -f "$AFTER_ANALYSIS_FILE" ]; then
+    AFTER_SMTP_CMDS_COUNT=$(grep -c "MAIL FROM\|RCPT TO\|DATA" "$AFTER_ANALYSIS_FILE" 2>/dev/null || echo "0")
+    # 패킷이 있는지 확인
+    after_total_packets=$(grep "총 패킷 수:" "$AFTER_ANALYSIS_FILE" | grep -o '[0-9]\+' | head -1 || echo "0")
+    [ "$after_total_packets" -gt 0 ] && AFTER_HAS_PACKETS=true
+fi
+
+# 개선된 판단 로직
+if [ "$BEFORE_HAS_PACKETS" = false ] && [ "$AFTER_HAS_PACKETS" = false ]; then
+    VERDICT="<p class='warning' style='color:orange; font-weight:bold;'><b>⚠️ 실험 데이터 부족</b> 강화 전후 모두 패킷이 캡처되지 않아 보안 강화 효과를 판단할 수 없습니다.</p>"
+elif [ "$BEFORE_HAS_PACKETS" = false ]; then
+    VERDICT="<p class='warning' style='color:orange; font-weight:bold;'><b>⚠️ 강화 전 데이터 없음</b> 강화 전 테스트에서 패킷이 캡처되지 않았습니다.</p>"
+elif [ "$AFTER_HAS_PACKETS" = false ]; then
+    VERDICT="<p class='success' style='color:green; font-weight:bold;'><b>✅ 보안 강화 성공 (추정)</b> 강화 후 패킷이 캡처되지 않아 공격이 차단된 것으로 보입니다.</p>"
+elif [ "$BEFORE_SMTP_CMDS_COUNT" -gt 0 ] && [ "$AFTER_SMTP_CMDS_COUNT" -eq 0 ]; then
     VERDICT="<p class='success' style='color:green; font-weight:bold;'><b>✅ 보안 강화 성공!</b> 강화 전에는 취약했으나 강화 후 보호됨</p>"
-elif [ "$BEFORE_SMTP_CMDS_COUNT" -eq 0 ]; then
-    VERDICT="<p class='warning' style='color:orange; font-weight:bold;'><b>⚠️ 테스트 오류 가능성</b> 강화 전 테스트에서 SMTP 명령이 감지되지 않음</p>"
 else
     VERDICT="<p class='failure' style='color:red; font-weight:bold;'><b>❌ 보안 강화 실패</b> 강화 후에도 메일 명령 실행 가능</p>"
+fi
+
+# 패킷 수 비교를 위한 변수 설정 개선
+before_packets="0"
+after_packets="0"
+
+# 총 패킷 수 추출 (메타데이터에서)
+if [ -f "$BEFORE_ANALYSIS_FILE" ]; then
+    before_packets=$(grep "총 패킷 수:" "$BEFORE_ANALYSIS_FILE" | grep -o '[0-9]\+' | head -1 || echo "0")
+fi
+
+if [ -f "$AFTER_ANALYSIS_FILE" ]; then
+    after_packets=$(grep "총 패킷 수:" "$AFTER_ANALYSIS_FILE" | grep -o '[0-9]\+' | head -1 || echo "0")
+fi
+
+# 공백 제거 및 기본값 설정
+before_packets=${before_packets:-0}
+after_packets=${after_packets:-0}
+
+# 디버그 출력 (필요시)
+# echo "DEBUG: before_packets='$before_packets', after_packets='$after_packets'" >&2
+
+# 숫자 비교 및 판단 로직
+if [[ "$before_packets" =~ ^[0-9]+$ ]] && [[ "$after_packets" =~ ^[0-9]+$ ]]; then
+    if [ "$before_packets" -gt "$after_packets" ]; then
+        PACKET_VERDICT="<p class='success' style='color:green; font-weight:bold;'><b>✅ 패킷 수 기준 강화 성공!</b> 패킷 수 감소 ($before_packets → $after_packets)</p>"
+    elif [ "$before_packets" -eq "$after_packets" ]; then
+        PACKET_VERDICT="<p class='warning' style='color:orange; font-weight:bold;'><b>⚠️ 패킷 수 변화 없음</b> 강화 전후 패킷 수 동일 ($before_packets)</p>"
+    else
+        PACKET_VERDICT="<p class='failure' style='color:red; font-weight:bold;'><b>❌ 패킷 수 기준 강화 실패</b> 패킷 수 증가 ($before_packets → $after_packets)</p>"
+    fi
+else
+    PACKET_VERDICT="<p class='warning' style='color:orange; font-weight:bold;'><b>⚠️ 패킷 수 판단 오류</b> 패킷 수 정보가 유효하지 않음 (before: '$before_packets', after: '$after_packets')</p>"
 fi
 
 cat > "$REPORT_FILE" <<EOF
@@ -152,6 +206,12 @@ cat > "$REPORT_FILE" <<EOF
             </ul>
             
             <p><small>참고: 이 판단은 SMTP 패킷 캡처에 기반합니다. 시스템 구성에 따라 추가적인 검토가 필요할 수 있습니다.</small></p>
+        </div>
+
+        <div class="packet-verdict">
+            <h2>패킷 수 기준 결론</h2>
+            <p>강화 전후 패킷 수를 비교하여 보안 강화 여부를 판단합니다:</p>
+            $PACKET_VERDICT
         </div>
 
         <div class="footer">
