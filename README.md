@@ -9,12 +9,12 @@
 ---
 
 ## 메일 취약점 실험 자동화 프로젝트
-이 프로젝트는 Docker 기반 격리 환경에서, 오픈 릴레이 취약점을 대상으로 `공격 → 하드닝 → 재검증` 사이클을 완전 자동화한다.  
+SMTP 오픈 릴레이 취약점 대상 Docker 기반 자동화 보안 테스트: `공격 시뮬레이션 → Postfix 하드닝 → 네트워크 레벨 차단 효과 검증` 파이프라인
 
 ![SMTP-DNS-overview](attachments/smtp-sequence-diagram.png)
 **Figure 1.** 프로젝트 시퀀스 다이어그램
 
-### 실험 흐름 요약 (`make demo`)
+## 실험 흐름 요약 (`make demo`)
 1. SMTP 공격 시도  
 2. 트래픽 캡처 (mail-postfix 내부 tcpdump)  
 3. Postfix 설정 변경 (하드닝)  
@@ -25,10 +25,10 @@
 ![SMTP-DNS-report-result](attachments/smtp-dns-report-result.png)
 **Figure 2.** SMTP 하드닝 결과 리포트 – 명령 차단 및 패킷 수 감소 확인
 
-- 보안 강화 전: `MAIL FROM`, `RCPT TO`, `DATA` 명령이 패킷에 포함됨
-- 보안 강화 후: 해당 명령이 더 이상 캡처되지 않아 공격 차단 추정
-- 패킷 수 기준: 39개 → 0개로 감소
-- 판단 기준: 명령어 유무 + 트래픽 양 비교
+| Item         | Before Hardening                         | After Hardening                    | Diff / Criteria                     |
+|--------------|--------------------------------------|----------------------------------|---------------------------------------|
+| SMTP 명령어  | `MAIL FROM`, `RCPT TO`, `DATA` | (Not Captured)           | 명령어 유무에 따른 차단 여부 추정     |
+| 패킷 수      | 39                                  | 0                               | 트래픽 양 급감 → 공격 시도 차단 가능 |
 
 ## !WORK IN PROGRESS!
 _*이 레포지토리는 보안 실험 환경 자체를 설계하고 자동화하는 데 중점을 둡니다. 공격 코드보다 실험 흐름과 재현 가능한 구조에 집중하며, 현재도 계속 작업 중입니다._
