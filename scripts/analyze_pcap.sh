@@ -155,10 +155,26 @@ TOTAL_PKTS=$(tshark -r "$PCAP_FILE" -T fields -e frame.number | wc -l)
 SMTP_PKTS=$(tshark -r "$PCAP_FILE" -Y "smtp" -T fields -e frame.number | wc -l)
 SMTP_CMDS=$(tshark -r "$PCAP_FILE" -Y "smtp.req.command" -T fields -e smtp.req.command | sort | uniq -c | sort -nr)
 
+# 포트별 SMTP 패킷 수 및 명령어 통계
+SMTP_PKTS_25=$(tshark -r "$PCAP_FILE" -Y "smtp && tcp.dstport==25" -T fields -e frame.number | wc -l)
+SMTP_PKTS_587=$(tshark -r "$PCAP_FILE" -Y "smtp && tcp.dstport==587" -T fields -e frame.number | wc -l)
+SMTP_CMDS_25=$(tshark -r "$PCAP_FILE" -Y "smtp && tcp.dstport==25 && smtp.req.command" -T fields -e smtp.req.command | sort | uniq -c | sort -nr)
+SMTP_CMDS_587=$(tshark -r "$PCAP_FILE" -Y "smtp && tcp.dstport==587 && smtp.req.command" -T fields -e smtp.req.command | sort | uniq -c | sort -nr)
+
 echo "- 총 패킷 수: $TOTAL_PKTS" >> "$OUTPUT_FILE"
 echo "- SMTP 관련 패킷 수: $SMTP_PKTS" >> "$OUTPUT_FILE"
-echo -e "\n### SMTP 명령어 통계:\n\`\`\`" >> "$OUTPUT_FILE"
+echo "- 포트 25 SMTP 패킷 수: $SMTP_PKTS_25" >> "$OUTPUT_FILE"
+echo "- 포트 587 SMTP 패킷 수: $SMTP_PKTS_587" >> "$OUTPUT_FILE"
+echo -e "\n### SMTP 명령어 통계(전체):\n\`\`\`" >> "$OUTPUT_FILE"
 echo "$SMTP_CMDS" >> "$OUTPUT_FILE"
+echo -e "\`\`\`" >> "$OUTPUT_FILE"
+
+echo -e "\n### 포트별 SMTP 명령어 통계:" >> "$OUTPUT_FILE"
+echo -e "\n#### 포트 25\n\`\`\`" >> "$OUTPUT_FILE"
+echo "$SMTP_CMDS_25" >> "$OUTPUT_FILE"
+echo -e "\`\`\`" >> "$OUTPUT_FILE"
+echo -e "\n#### 포트 587\n\`\`\`" >> "$OUTPUT_FILE"
+echo "$SMTP_CMDS_587" >> "$OUTPUT_FILE"
 echo -e "\`\`\`" >> "$OUTPUT_FILE"
 
 # JSON 형식의 요약 정보도 추가
@@ -170,7 +186,9 @@ SUMMARY_JSON=$(cat <<EOF
     "pcap_file": "$PCAP_FILE",
     "output_file": "$OUTPUT_FILE",
     "total_packets": $TOTAL_PKTS,
-    "smtp_packets": $SMTP_PKTS
+    "smtp_packets": $SMTP_PKTS,
+    "smtp_packets_port_25": $SMTP_PKTS_25,
+    "smtp_packets_port_587": $SMTP_PKTS_587
 }
 EOF
 )
