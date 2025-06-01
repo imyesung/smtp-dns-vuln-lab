@@ -37,9 +37,7 @@ alias_database = hash:/etc/aliases
 message_size_limit = 10240000
 mailbox_size_limit = 51200000
 recipient_delimiter = +
-
 # 로깅
-mail_log_file = /var/log/postfix.log
 
 # 실험실용 불필요한 기능 비활성화
 disable_dns_lookups = yes
