@@ -6,12 +6,12 @@ CONTROLLER_CONTAINER := controller
 MUA_CONTAINER := mua-debian
 MAIL_SERVER_CONTAINER := mail-postfix
 SCRIPTS_DIR := /scripts
-ARTIFACTS_DIR := /artifacts
+ARTIFACTS_DIR := ./artifacts
 HOST_ARTIFACTS_DIR := ./artifacts
 HOST_SCRIPTS_DIR := ./scripts
 ATTACK_ID_PREFIX := EXP
 CURRENT_TIMESTAMP := $(shell LC_ALL=C date +%Y%m%d_%H%M%S)
-DEMO_RUN_ID := $(ATTACK_ID_PREFIX)_$(CURRENT_TIMESTAMP)
+RUN_ID := EXP_$(shell date +%Y%m%d_%H%M%S)
 
 # Container 상태 확인 및 보장
 define ensure_container_running
@@ -91,15 +91,23 @@ endef
 wait_for_postfix:
 	@echo "INFO: Waiting for Postfix service..."
 	@for i in $$(seq 1 60); do \
-		if docker exec mail-postfix netstat -tuln | grep ':25 ' >/dev/null 2>&1; then \
-			echo "INFO: Postfix ready after $$i seconds"; \
+		if docker exec mail-postfix netstat -tuln | grep -E ':(25|587) ' >/dev/null 2>&1; then \
+			echo "INFO: Postfix ready (port 25 or 587) after $$i seconds"; \
 			sleep 2; \
 			exit 0; \
+		fi; \
+		if [ $$((i % 5)) -eq 0 ]; then \
+			echo "INFO: [Debug] Current netstat:"; \
+			docker exec mail-postfix netstat -tuln || true; \
+			echo "INFO: [Debug] Postfix master process:"; \
+			docker exec mail-postfix ps aux | grep master || true; \
 		fi; \
 		echo "INFO: Waiting for Postfix... ($$i/60)"; \
 		sleep 1; \
 	done; \
 	echo "ERROR: Postfix not ready after 60 seconds"; \
+	docker exec mail-postfix netstat -tuln || true; \
+	docker exec mail-postfix tail -n 50 /var/log/mail.log || true; \
 	exit 1
 
 .PHONY: up down logs ps build clean-artifacts demo demo-before demo-after analyze-all help exec postfix-restore postfix-harden generate-report
@@ -134,28 +142,28 @@ clean-artifacts:
 	fi
 
 demo: up demo-before postfix-harden demo-after analyze-all generate-report postfix-restore down
-	@echo "INFO: Full demo sequence complete. Run ID: $(DEMO_RUN_ID)"
+	@echo "INFO: Full demo sequence complete. Run ID: $(RUN_ID)" # DEMO_RUN_ID -> RUN_ID
 
 demo-before:
-	@echo "INFO: === Stage: Before Hardening (ID: $(DEMO_RUN_ID)_BEFORE) ==="
+	@echo "INFO: === Stage: Before Hardening (ID: $(RUN_ID)_BEFORE) ==="
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 	$(MAKE) wait_for_postfix
 	$(call ensure_container_running,$(MUA_CONTAINER))
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
-	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_before"
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/capture_smtp.sh $(RUN_ID)_BEFORE
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_before,30)
 	@echo "INFO: Waiting 10 seconds for tcpdump to stabilize..."
 	sleep 10
-	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(RUN_ID)_BEFORE
 	@echo "INFO: Waiting 15 seconds for traffic capture..."
 	sleep 15
 	@echo "INFO: Stopping packet capture..."
-	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid ]; then kill \$$(cat /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid; fi"
+	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(RUN_ID)_BEFORE.pid ]; then kill \$$(cat /tmp/tcpdump_$(RUN_ID)_BEFORE.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(RUN_ID)_BEFORE.pid; fi"
 	sleep 10
-	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap,90)
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(RUN_ID)_BEFORE.pcap,90)
 	@echo "INFO: Checking PCAP file size..."
-	-ls -la $(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt
+	-ls -la $(HOST_ARTIFACTS_DIR)/smtp_$(RUN_ID)_BEFORE.pcap
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(RUN_ID)_BEFORE.txt
 
 postfix-harden:
 	@echo "INFO: Applying Postfix security hardening..."
@@ -174,35 +182,39 @@ postfix-restore:
 	@echo "INFO: Vulnerable configuration restored"
 
 demo-after:
-	@echo "INFO: === Stage: After Hardening (ID: $(DEMO_RUN_ID)_AFTER) ==="
+	@echo "INFO: === Stage: After Hardening (ID: $(RUN_ID)_AFTER) ===" # DEMO_RUN_ID -> RUN_ID
 	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
 	$(MAKE) wait_for_postfix
 	$(call ensure_container_running,$(MUA_CONTAINER))
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
-	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_after"
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_after" # DEMO_RUN_ID -> RUN_ID
 	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_after,30)
 	@echo "INFO: Waiting 5 seconds for tcpdump to stabilize..."
 	sleep 5
-	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_AFTER || echo "WARNING: Attack script failed, but continuing with demo..."
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(RUN_ID)_AFTER || echo "WARNING: Attack script failed, but continuing with demo..." # DEMO_RUN_ID -> RUN_ID
 	@echo "INFO: Waiting 10 seconds for traffic capture..."
 	sleep 10
 	@echo "INFO: Stopping packet capture..."
-	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid ]; then kill \$$(cat /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid; fi"
+	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(RUN_ID)_AFTER.pid ]; then kill \$$(cat /tmp/tcpdump_$(RUN_ID)_AFTER.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(RUN_ID)_AFTER.pid; fi" # DEMO_RUN_ID -> RUN_ID
 	sleep 5
-	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap,90)
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(RUN_ID)_AFTER.pcap,90) # DEMO_RUN_ID -> RUN_ID
 	@echo "INFO: Checking PCAP file size..."
-	-ls -la $(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt
+	-ls -la $(HOST_ARTIFACTS_DIR)/smtp_$(RUN_ID)_AFTER.pcap # DEMO_RUN_ID -> RUN_ID
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(RUN_ID)_AFTER.txt # DEMO_RUN_ID -> RUN_ID
 
 analyze-all:
 	@echo "INFO: Analyzing PCAPs..."
 	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt
-	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(RUN_ID)_BEFORE.txt # DEMO_RUN_ID -> RUN_ID
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(RUN_ID)_AFTER.txt # DEMO_RUN_ID -> RUN_ID
 
 generate-report:
-	@echo "INFO: Generating report for Run ID: $(DEMO_RUN_ID)..."
-	$(HOST_SCRIPTS_DIR)/gen_report_html.sh "$(DEMO_RUN_ID)" "$(HOST_ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt" "$(HOST_ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt" "$(HOST_ARTIFACTS_DIR)"
+	@echo "INFO: Generating report for Run ID: [$(RUN_ID)]..."
+	@echo "INFO: ARTIFACTS_DIR for report script is [$(ARTIFACTS_DIR)]"
+	./scripts/gen_report_html.sh "$(RUN_ID)" \
+		"$(ARTIFACTS_DIR)/analysis_$(RUN_ID)_BEFORE.txt" \
+		"$(ARTIFACTS_DIR)/analysis_$(RUN_ID)_AFTER.txt" \
+		"$(ARTIFACTS_DIR)"
 
 help:
 	@echo "Available commands:"
