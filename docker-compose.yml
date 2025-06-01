@@ -14,7 +14,13 @@ services:
       - "25:25"
       - "587:587"
     volumes:
-      - ./configs/postfix:/postfix
+      - ./configs/postfix/main.cf:/etc/postfix/main.cf
+      - ./configs/postfix/master.cf:/etc/postfix/master.cf
+      # 필요시 secure/vulnerable config도 별도 마운트
+      - ./configs/postfix/main.cf.secure:/etc/postfix/main.cf.secure
+      - ./configs/postfix/main.cf.vulnerable:/etc/postfix/main.cf.vulnerable
+      - ./configs/postfix/master.cf.secure:/etc/postfix/master.cf.secure
+      - ./configs/postfix/master.cf.vulnerable:/etc/postfix/master.cf.vulnerable
       - ./scripts:/scripts
       - ./artifacts:/artifacts
 
