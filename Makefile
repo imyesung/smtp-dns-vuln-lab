@@ -102,7 +102,7 @@ wait_for_postfix:
 	echo "ERROR: Postfix not ready after 60 seconds"; \
 	exit 1
 
-.PHONY: up down logs ps build clean-artifacts demo demo-before demo-after analyze-all help exec postfix-restore postfix-harden generate-report
+.PHONY: up down logs ps build clean-artifacts demo demo-before demo-after analyze-all help exec postfix-restore postfix-harden generate-report run-checks check-starttls check-relay check-dns check-auth check-spfdkim comprehensive-test
 
 up:
 	@echo "INFO: Starting all Docker services..."
@@ -204,20 +204,137 @@ generate-report:
 	@echo "INFO: Generating report for Run ID: $(DEMO_RUN_ID)..."
 	$(HOST_SCRIPTS_DIR)/gen_report_html.sh "$(DEMO_RUN_ID)" "$(HOST_ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt" "$(HOST_ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt" "$(HOST_ARTIFACTS_DIR)"
 
+# 새로운 보안 테스트 명령어들
+run-checks: up check-starttls check-relay check-dns check-auth check-spfdkim
+	@echo "INFO: All security checks completed for Run ID: $(DEMO_RUN_ID)"
+
+check-starttls:
+	@echo "INFO: Running STARTTLS downgrade attack..."
+	$(call ensure_container_running,$(MUA_CONTAINER))
+	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_starttls_downgrade.sh $(DEMO_RUN_ID)
+
+check-relay:
+	@echo "INFO: Running open relay attack..."
+	$(call ensure_container_running,$(MUA_CONTAINER))
+	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)
+
+check-dns:
+	@echo "INFO: Running DNS recursion and DANE/MTA-STS attacks..."
+	$(call ensure_container_running,$(MUA_CONTAINER))
+	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_dns_recursion.sh $(DEMO_RUN_ID)
+	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_dane_mta-sts.sh $(DEMO_RUN_ID)
+
+check-auth:
+	@echo "INFO: Running plaintext authentication attack..."
+	$(call ensure_container_running,$(MUA_CONTAINER))
+	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_auth_plaintext.sh $(DEMO_RUN_ID)
+
+check-spfdkim:
+	@echo "INFO: Running SPF/DKIM/DMARC analysis..."
+	$(call ensure_container_running,$(MUA_CONTAINER))
+	docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/analyze_headers.sh $(DEMO_RUN_ID)
+
+comprehensive-test: up comprehensive-before postfix-harden comprehensive-after analyze-comprehensive generate-comprehensive-report postfix-restore down
+	@echo "INFO: Comprehensive security test completed. Run ID: $(DEMO_RUN_ID)"
+
+comprehensive-before:
+	@echo "INFO: === Comprehensive Test: Before Hardening (ID: $(DEMO_RUN_ID)_BEFORE) ==="
+	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
+	$(MAKE) wait_for_postfix
+	$(call ensure_container_running,$(MUA_CONTAINER))
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	# 패킷 캡처 시작
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_BEFORE & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_before"
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_before,30)
+	@echo "INFO: Waiting 5 seconds for tcpdump to stabilize..."
+	sleep 5
+	# 모든 보안 테스트 실행
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_starttls_downgrade.sh $(DEMO_RUN_ID)_BEFORE
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_BEFORE
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_dns_recursion.sh $(DEMO_RUN_ID)_BEFORE
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_dane_mta-sts.sh $(DEMO_RUN_ID)_BEFORE
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_auth_plaintext.sh $(DEMO_RUN_ID)_BEFORE
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/analyze_headers.sh $(DEMO_RUN_ID)_BEFORE
+	@echo "INFO: Waiting 10 seconds for traffic capture..."
+	sleep 10
+	# 패킷 캡처 중지
+	@echo "INFO: Stopping packet capture..."
+	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid ]; then kill \$$(cat /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(DEMO_RUN_ID)_BEFORE.pid; fi"
+	sleep 5
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap,90)
+
+comprehensive-after:
+	@echo "INFO: === Comprehensive Test: After Hardening (ID: $(DEMO_RUN_ID)_AFTER) ==="
+	$(call ensure_container_running,$(MAIL_SERVER_CONTAINER))
+	$(MAKE) wait_for_postfix
+	$(call ensure_container_running,$(MUA_CONTAINER))
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	# 패킷 캡처 시작
+	docker exec $(CONTROLLER_CONTAINER) bash -c "$(SCRIPTS_DIR)/capture_smtp.sh $(DEMO_RUN_ID)_AFTER & echo \$$! > /tmp/capture.pid && touch $(ARTIFACTS_DIR)/capture_started_after"
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/capture_started_after,30)
+	@echo "INFO: Waiting 5 seconds for tcpdump to stabilize..."
+	sleep 5
+	# 모든 보안 테스트 재실행
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_starttls_downgrade.sh $(DEMO_RUN_ID)_AFTER
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_openrelay.sh $(DEMO_RUN_ID)_AFTER
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_dns_recursion.sh $(DEMO_RUN_ID)_AFTER
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_dane_mta-sts.sh $(DEMO_RUN_ID)_AFTER
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/attack_auth_plaintext.sh $(DEMO_RUN_ID)_AFTER
+	-docker exec $(MUA_CONTAINER) $(SCRIPTS_DIR)/analyze_headers.sh $(DEMO_RUN_ID)_AFTER
+	@echo "INFO: Waiting 10 seconds for traffic capture..."
+	sleep 10
+	# 패킷 캡처 중지
+	@echo "INFO: Stopping packet capture..."
+	-docker exec $(CONTROLLER_CONTAINER) bash -c "if [ -f /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid ]; then kill \$$(cat /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid) 2>/dev/null || true; rm /tmp/tcpdump_$(DEMO_RUN_ID)_AFTER.pid; fi"
+	sleep 5
+	$(call wait_for_file,$(HOST_ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap,90)
+
+analyze-comprehensive:
+	@echo "INFO: Analyzing comprehensive test results..."
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	# 기존 PCAP 분석
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_BEFORE.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_pcap.sh $(ARTIFACTS_DIR)/smtp_$(DEMO_RUN_ID)_AFTER.pcap $(ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt
+
+generate-comprehensive-report:
+	@echo "INFO: Generating comprehensive security report for Run ID: $(DEMO_RUN_ID)..."
+	$(HOST_SCRIPTS_DIR)/gen_report_html.sh "$(DEMO_RUN_ID)" "$(HOST_ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_BEFORE.txt" "$(HOST_ARTIFACTS_DIR)/analysis_$(DEMO_RUN_ID)_AFTER.txt" "$(HOST_ARTIFACTS_DIR)"
+	@echo "INFO: Generating text-based comprehensive report..."
+	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/generate_comprehensive_report.sh $(DEMO_RUN_ID)
+
 help:
 	@echo "Available commands:"
+	@echo ""
+	@echo "Basic Operations:"
 	@echo "  make up                - Start all Docker services."
 	@echo "  make down              - Stop and remove all Docker services."
 	@echo "  make logs              - Follow logs from all services."
 	@echo "  make ps                - Show running Docker containers."
 	@echo "  make build             - Rebuild Docker images without cache."
 	@echo "  make clean-artifacts   - Remove all files from ./artifacts directory."
-	@echo "  make demo              - Run the full demo sequence."
-	@echo "  make demo-before       - Run tests before hardening."
-	@echo "  make demo-after        - Run tests after hardening."
-	@echo "  make analyze-all       - Analyze PCAPs from both stages."
-	@echo "  make postfix-restore   - Restore postfix config to default or backup."
-	@echo "  make generate-report   - Generate an HTML security report from analysis files."
+	@echo ""
+	@echo "Demo & Testing:"
+	@echo "  make demo              - Run the original demo sequence (open relay test)."
+	@echo "  make comprehensive-test - Run comprehensive security tests (all 5 experiments)."
+	@echo "  make run-checks        - Run all security checks without hardening."
+	@echo ""
+	@echo "Individual Security Tests:"
+	@echo "  make check-starttls    - Test STARTTLS downgrade vulnerabilities."
+	@echo "  make check-relay       - Test open relay vulnerabilities."
+	@echo "  make check-dns         - Test DNS recursion and DANE/MTA-STS."
+	@echo "  make check-auth        - Test plaintext authentication vulnerabilities."
+	@echo "  make check-spfdkim     - Test SPF/DKIM/DMARC authentication."
+	@echo ""
+	@echo "Configuration Management:"
+	@echo "  make postfix-harden    - Apply security hardening to Postfix."
+	@echo "  make postfix-restore   - Restore vulnerable Postfix configuration."
+	@echo ""
+	@echo "Analysis & Reporting:"
+	@echo "  make analyze-all       - Analyze PCAPs from demo stages."
+	@echo "  make generate-report   - Generate HTML security report."
+	@echo ""
+	@echo "Advanced:"
+	@echo "  make exec SCRIPT=<name> [ARGS=\"<args>\"] - Execute custom script."
 
 exec:
 ifndef SCRIPT
@@ -225,3 +342,151 @@ ifndef SCRIPT
 endif
 	@echo "INFO: Executing $(SCRIPTS_DIR)/$(SCRIPT) $(ARGS) in $(CONTROLLER_CONTAINER)..."
 	docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/$(SCRIPT) $(ARGS)
+
+# CVSS 분석 및 위험도 평가
+.PHONY: cvss-analysis
+cvss-analysis:
+	@echo "INFO: Generating CVSS 3.1 risk assessment..."
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	docker exec $(CONTROLLER_CONTAINER) python3 $(SCRIPTS_DIR)/calc_cvss.py --format table
+	@echo ""
+	@echo "INFO: Detailed CVSS analysis saved to artifacts/cvss_analysis.json"
+	docker exec $(CONTROLLER_CONTAINER) python3 $(SCRIPTS_DIR)/calc_cvss.py --output $(ARTIFACTS_DIR)/cvss_analysis.json
+
+# SMTP 응답 코드 분석
+.PHONY: smtp-response-analysis
+smtp-response-analysis:
+	@echo "INFO: Analyzing SMTP response codes from latest PCAPs..."
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	@if docker exec $(CONTROLLER_CONTAINER) find $(ARTIFACTS_DIR) -name "*.pcap" -type f | head -1 >/dev/null 2>&1; then \
+		latest_pcap=$$(docker exec $(CONTROLLER_CONTAINER) find $(ARTIFACTS_DIR) -name "*.pcap" -type f | sort -r | head -1); \
+		echo "INFO: Analyzing $$latest_pcap"; \
+		docker exec $(CONTROLLER_CONTAINER) $(SCRIPTS_DIR)/analyze_smtp_responses.sh $$latest_pcap; \
+	else \
+		echo "WARN: No PCAP files found for analysis"; \
+	fi
+
+# 프로젝트 상태 대시보드
+.PHONY: status
+status:
+	@echo "======================================================"
+	@echo "        SMTP & DNS Vulnerability Lab - Status"
+	@echo "======================================================"
+	@echo ""
+	@echo "Container Status:"
+	@docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "(controller|mua-debian|mail-postfix|dns-dnsmasq)" || echo "No lab containers running"
+	@echo ""
+	@echo "Recent Test Results:"
+	@if [ -d "$(HOST_ARTIFACTS_DIR)" ]; then \
+		echo "Latest 5 test runs:"; \
+		ls -lt $(HOST_ARTIFACTS_DIR)/ | grep -E "(analysis_|comprehensive_)" | head -5 | awk '{print "  " $$9 " (" $$6" "$$7" "$$8")"}' || echo "  No test results found"; \
+	else \
+		echo "  Artifacts directory not found"; \
+	fi
+	@echo ""
+	@echo "Available Reports:"
+	@if [ -d "$(HOST_ARTIFACTS_DIR)" ]; then \
+		ls -1 $(HOST_ARTIFACTS_DIR)/*.html 2>/dev/null | tail -3 | sed 's/^/  /' || echo "  No HTML reports found"; \
+	fi
+	@echo ""
+	@echo "Security Baseline:"
+	$(call ensure_container_running,$(CONTROLLER_CONTAINER))
+	@docker exec $(CONTROLLER_CONTAINER) grep -E "(smtpd_relay_restrictions|smtpd_tls_security_level)" /etc/postfix/main.cf 2>/dev/null | sed 's/^/  /' || echo "  Postfix configuration not accessible"
+
+# 실험 환경 완전 정리
+.PHONY: deep-clean
+deep-clean: clean
+	@echo "INFO: Performing deep cleanup..."
+	@echo "INFO: Removing all artifacts and backups..."
+	rm -rf $(HOST_ARTIFACTS_DIR)/* || true
+	rm -rf ./backups/* || true
+	rm -rf ./logs/* || true
+	@echo "INFO: Removing all Docker images..."
+	docker rmi -f $$(docker images -q --filter "reference=*smtp-dns*") 2>/dev/null || true
+	docker rmi -f $$(docker images -q --filter "dangling=true") 2>/dev/null || true
+	@echo "INFO: Deep cleanup completed"
+
+# 종합 보안 평가 (모든 분석 도구 실행)
+.PHONY: security-assessment
+security-assessment: comprehensive-test cvss-analysis smtp-response-analysis
+	@echo ""
+	@echo "======================================================"
+	@echo "        Complete Security Assessment Finished"
+	@echo "======================================================"
+	@echo ""
+	@echo "Generated Artifacts:"
+	@ls -la $(HOST_ARTIFACTS_DIR)/ | grep -E "\.(html|json|pcap)$$" | tail -10
+	@echo ""
+	@echo "Next Steps:"
+	@echo "1. Review HTML reports in artifacts/ directory"
+	@echo "2. Check CVSS analysis for risk prioritization"
+	@echo "3. Examine SMTP response patterns"
+	@echo "4. Apply security hardening: make postfix-harden"
+
+# 개발자를 위한 디버깅 도구
+.PHONY: debug-logs
+debug-logs:
+	@echo "INFO: Collecting debug information..."
+	@echo ""
+	@echo "=== Container Logs (last 50 lines each) ==="
+	@for container in controller mua-debian mail-postfix dns-dnsmasq; do \
+		echo "--- $$container ---"; \
+		docker logs --tail 50 $$container 2>&1 | head -20 || echo "Container $$container not available"; \
+		echo ""; \
+	done
+	@echo ""
+	@echo "=== Network Information ==="
+	@docker network ls | grep smtp
+	@echo ""
+	@echo "=== Recent Script Executions ==="
+	@docker exec $(CONTROLLER_CONTAINER) find $(ARTIFACTS_DIR) -name "*.json" -type f -exec grep -l "timestamp" {} \; | sort -r | head -5 | xargs -I {} basename {} || echo "No recent JSON logs"
+
+# 도움말 업데이트
+.PHONY: help
+help:
+	@echo "======================================================"
+	@echo "    SMTP & DNS Vulnerability Lab - Make Targets"
+	@echo "======================================================"
+	@echo ""
+	@echo "Quick Start:"
+	@echo "  make comprehensive-test - 🚀 Full automated security testing"
+	@echo "  make status            - 📊 Show current lab status"
+	@echo "  make security-assessment - 🔒 Complete security evaluation"
+	@echo ""
+	@echo "Basic Operations:"
+	@echo "  make up                - Start all containers"
+	@echo "  make demo              - Quick open relay demo"
+	@echo "  make clean             - Stop and remove containers"
+	@echo "  make deep-clean        - Complete cleanup (containers + data)"
+	@echo ""
+	@echo "Security Tests:"
+	@echo "  make attack-all        - Run all security attack scripts"
+	@echo "  make check-starttls    - Test STARTTLS downgrade vulnerabilities"
+	@echo "  make check-relay       - Test open relay vulnerabilities"
+	@echo "  make check-dns         - Test DNS recursion and DANE/MTA-STS"
+	@echo "  make check-auth        - Test plaintext authentication"
+	@echo "  make check-spfdkim     - Test SPF/DKIM/DMARC authentication"
+	@echo ""
+	@echo "Analysis & Reporting:"
+	@echo "  make cvss-analysis     - 📈 Generate CVSS 3.1 risk scores"
+	@echo "  make smtp-response-analysis - 📧 Analyze SMTP response patterns"
+	@echo "  make generate-report   - 📄 Create comprehensive HTML report"
+	@echo "  make analyze-all       - Analyze all captured packet data"
+	@echo ""
+	@echo "Configuration:"
+	@echo "  make postfix-harden    - Apply security hardening"
+	@echo "  make postfix-restore   - Restore vulnerable configuration"
+	@echo ""
+	@echo "Development & Debug:"
+	@echo "  make debug-logs        - Show container logs and debug info"
+	@echo "  make exec SCRIPT=<name> - Execute custom script in controller"
+	@echo ""
+	@echo "Example Workflows:"
+	@echo "  # Complete assessment:"
+	@echo "  make security-assessment"
+	@echo ""
+	@echo "  # Custom testing:"
+	@echo "  make up && make attack-all && make cvss-analysis"
+	@echo ""
+	@echo "  # Debug issues:"
+	@echo "  make status && make debug-logs"
