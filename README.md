@@ -11,18 +11,21 @@
 
 _*이 레포지토리는 보안 실험 환경 자체를 설계하고 자동화하는 데 중점을 둡니다. 공격 코드보다 실험 흐름과 재현 가능한 구조에 집중하며, 현재도 계속 작업 중입니다._
 
-## !WORK IN PROGRESS!
-**구현 완료**
-- Docker 기반 Postfix + DNSMasq + MUA 인프라 자동 구성
-- 오픈 릴레이 실험 자동화 및 보안 강화 적용
-- 실험 전후 결과 비교 리포트(HTML) 자동 생성
-- 컨테이너 상태 체크, 스크립트 실행 흐름 자동화(Makefile)
-- 디버깅 및 로깅 체계 구축 (NDJSON 형식, 상세 swaks 출력)
+**구현 완료된 주요 기능**
+- **Docker 인프라**: Postfix + DNSMasq + MUA + Controller 컨테이너 환경
+- **5개 보안 공격 스크립트**: STARTTLS 다운그레이드, 오픈 릴레이, DNS 재귀, DANE/MTA-STS, 인증 공격
+- **패킷 캡처 & 분석**: tcpdump/tshark 기반 네트워크 트래픽 분석
+- **자동화된 보안 강화**: Postfix 설정 자동화 및 백업/복원 메커니즘
+- **종합 리포트 생성**: HTML 기반 before/after 비교 분석 보고서
+- **완전 자동화**: `make comprehensive-test`로 전체 워크플로우 실행
+- **구조화된 로깅**: NDJSON 형식 로그 및 상세 분석 데이터
+- **CVSS 3.1 위험도 평가**: 자동화된 보안 점수 산정 시스템
+- **SMTP 응답 분석**: 응답 코드별 상세 분류 및 보안 패턴 분석
 
-**예정 작업**
-- SPF 스푸핑, DNS 재귀 질의 실험 스크립트 완성
-- STARTTLS 캡슐화 우회 실험 고도화
-- 오픈 릴레이 테스트 안정화 (DNS 조회 오류 해결)
+**향후 개선 계획**
+- 시각적 시퀀스 다이어그램 (Mermaid) 자동 생성
+- 위협 모델링 다이어그램 및 ATT&CK 프레임워크 매핑
+- SMTP Fuzzer 통합 (취약점 자동 발견)
 
 ## Objectives
 - Docker(Debian base) 환경으로 이메일 스택(Postfix + DNSMasq)을 구성한다.  
@@ -50,13 +53,25 @@ _*이 레포지토리는 보안 실험 환경 자체를 설계하고 자동화�
 | `configs/`            | Postfix / DNSMasq 템플릿                       |
 | `artifacts/`          | 로그·pcap·HTML 보고서 저장 (git-ignored)       |
 
-## Quick Demo
-```
-make demo
-├─ mua-debian  : 인증 없는 메일 전송(공격)
-├─ mail-postfix: 설정 변경(보안 강화)
-└─ mua-debian  : 동일 공격 재시도 & 결과 캡처
-     ↳ before / after 비교 → HTML 리포트
+## Quick Start
+```bash
+# Turn-Key 자동화 보안 평가 (권장)
+make security-assessment
+├─ 환경 검증 & 컨테이너 시작
+├─ 5개 보안 공격 실행 (패킷 캡처)
+├─ Postfix 보안 강화 적용
+├─ 동일 공격 재실행 (효과 검증)
+├─ CVSS 3.1 위험도 평가
+├─ SMTP 응답 패턴 분석
+└─ 종합 분석 리포트 생성 → artifacts/
+
+# 개별 기능 실행
+make status                  # 현재 상태 확인
+make comprehensive-test      # 기본 종합 테스트
+make cvss-analysis          # CVSS 위험도 평가
+make smtp-response-analysis # SMTP 응답 분석
+make attack-all             # 모든 공격 스크립트 실행
+make harden                 # Postfix 보안 강화
 ```
 
 ## 주요 명령어
@@ -101,4 +116,4 @@ make secure-and-verify      # 패치 + 재공격
 ## 보안 및 공개 가이드라인
 - **로컬 Docker** 이외 환경에서 실행 금지
 - 공격 스크립트는 **방어 효과 검증** 용도이며, 실무 시스템 대상 사용 금지
-- 본 프로젝트로 발생한 법적·윤리적 문제는 전적으로 사용자 책임
+- 본 프로젝트로 발생한 법적·윤리적 문제는 전적으로 사용자 책임입니다.
