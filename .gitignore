@@ -51,3 +51,12 @@ scripts/debug_*.sh
 !README.md
 !lab-notebook.md
 configs/postfix/*.bak
+debug_capture_test.sh
+scripts/attack_openrelay_old.sh
+scripts/attack_openrelay_new.sh
+scripts/common_functions.sh
+CODE_DUPLICATION_REPORT.md
+debug_capture_test.sh
+scripts/attack_openrelay_old.sh
+scripts/attack_openrelay_new.sh
+scripts/common_functions.sh
