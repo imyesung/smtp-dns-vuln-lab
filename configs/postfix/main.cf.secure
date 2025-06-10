@@ -11,35 +11,40 @@ inet_protocols = ipv4
 
 # ==== SECURE SETTINGS (HARDENED) ====
 # 신뢰할 수 있는 네트워크에서만 릴레이 허용
-mynetworks = 127.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+mynetworks = 127.0.0.0/8
 
 # 로컬 도메인에 대해서만 메일 수신
 relay_domains = $mydomain
 
 # 엄격한 수신자 제한
+smtpd_relay_restrictions = \
+    permit_mynetworks,\
+    permit_sasl_authenticated,\
+    reject_unauth_destination,\
+    reject
 smtpd_recipient_restrictions = 
     permit_mynetworks,
     permit_sasl_authenticated,
     reject_unauth_destination,
-    permit
+    reject
 
 # 발신자 제한
 smtpd_sender_restrictions = 
     permit_mynetworks,
     permit_sasl_authenticated,
-    permit
+    reject
 
 # 클라이언트 제한
 smtpd_client_restrictions = 
     permit_mynetworks,
     permit_sasl_authenticated,
-    permit
+    reject
 
 # HELO 제한
 smtpd_helo_restrictions = 
     permit_mynetworks,
     permit_sasl_authenticated,
-    permit
+    reject
 
 # ==== END SECURE SETTINGS ====
 
