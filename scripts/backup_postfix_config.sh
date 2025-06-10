@@ -1,28 +1,28 @@
 #!/bin/bash
-# Postfix 설정 백업 스크립트
+# Postfix 설정 백업 스크립트 - Enhanced with common utilities
 
-# 스크립트 디렉토리 설정 (상대 경로 사용)
+# 공통 함수 로드
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# PROJECT_ROOT는 컨테이너 내부에서는 / 이므로 직접 경로를 지정하는 것이 더 안전합니다.
-
-# utils.sh 함수 사용
 source "${SCRIPT_DIR}/utils.sh"
 
-# 백업 디렉토리 설정 - /artifacts 하위로 변경하여 호스트와 공유
-BACKUP_DIR="/artifacts/backups/postfix"
-# CONTAINER_NAME="mail-postfix" # 사용되지 않음
+# 공통 초기화
+init_common
+SCRIPT_START_TIME=$(date +%s)
 
-# 로그 디렉토리 및 파일 설정 - /artifacts 하위로 변경
+log_info "Starting Postfix configuration backup"
+
+# 필수 명령어 확인
+check_required_commands tar cp sha256sum find || exit 1
+
+# 백업 및 로그 디렉토리 설정
+BACKUP_DIR="/artifacts/backups/postfix"
 LOG_DIR="/artifacts/logs"
 LOG_FILE="${LOG_DIR}/postfix_backup.log"
-
-# Postfix 설정 파일이 위치한 controller 컨테이너 내 경로
 POSTFIX_CONF_DIR_IN_CONTROLLER="/shared/postfix"
 
-
 # 디렉토리 확인 및 생성
-mkdir -p "$BACKUP_DIR"
-mkdir -p "$LOG_DIR"
+ensure_directory "$BACKUP_DIR"
+ensure_directory "$LOG_DIR"
 
 # 로그 파일 덮어쓰기 방지
 safe_logfile "$LOG_FILE"

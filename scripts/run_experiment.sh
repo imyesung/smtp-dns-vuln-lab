@@ -1,34 +1,42 @@
 #!/bin/bash
-# run_experiment.sh - SMTP 오픈 릴레이 테스트 자동화 스크립트
+# 표준화된 실험 워크플로우 스크립트 - Enhanced with common utilities
 
-# 인자 처리 (before 또는 after)
+# 공통 함수 로드
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/utils.sh"
+
+# 공통 초기화
+init_common
+SCRIPT_START_TIME=$(date +%s)
+
+# 인자 처리 (backward compatibility 유지)
 PHASE=$1
 if [[ -z "$PHASE" ]]; then
-    echo "Usage: $0 [before|after]"
+    log_error "Usage: $0 [before|after] [attack_id]"
+    log_info "Examples:"
+    log_info "  $0 before"
+    log_info "  $0 after EXP_20250610_120000"
     exit 1
 fi
 
-# 색상 정의 (로그 가독성 향상)
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Attack ID 처리
+ATTACK_ID="${2:-$(generate_attack_id "ORT")}-${PHASE}"
+
+log_info "Starting standardized experiment workflow"
+log_info "Phase: $PHASE"
+log_info "Attack ID: $ATTACK_ID"
+
+# 필수 명령어 확인
+check_required_commands docker || exit 1
 
 # 설정 변수
 LOG_DIR="/artifacts"
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-ATTACK_ID="ORT-${TIMESTAMP}-${PHASE}"
-mkdir -p "$LOG_DIR"
+ensure_directory "$LOG_DIR"
 
 # 파일 경로 정의
 PCAP_FILE="${LOG_DIR}/smtp_${ATTACK_ID}.pcap"
 ATTACK_LOG="${LOG_DIR}/openrelay_${ATTACK_ID}.log"
 ANALYSIS_FILE="${LOG_DIR}/analysis_${ATTACK_ID}.txt"
-
-# 로그 출력 함수
-log_step()  { echo -e "${GREEN}[$(date +"%H:%M:%S")] [STEP] $1${NC}"; }
-log_info()  { echo -e "${BLUE}[$(date +"%H:%M:%S")] [INFO] $1${NC}"; }
 log_warn()  { echo -e "${YELLOW}[$(date +"%H:%M:%S")] [WARN] $1${NC}"; }
 log_error() { echo -e "${RED}[$(date +"%H:%M:%S")] [ERROR] $1${NC}"; }
 

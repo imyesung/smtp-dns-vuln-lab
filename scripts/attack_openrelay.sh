@@ -1,104 +1,74 @@
 #!/bin/bash
-set -x
+# SMTP Open Relay Attack Script - Enhanced with common utilities
+
+# 공통 함수 로드
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/utils.sh"
+
+# 공통 초기화
+init_common
+SCRIPT_START_TIME=$(date +%s)
 
 # 인자로 ATTACK_ID 받기
 ATTACK_ID="$1"
 if [[ -z "$ATTACK_ID" ]]; then
-    TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    ATTACK_ID="ORT-${TIMESTAMP}"
+    ATTACK_ID=$(generate_attack_id "ORT")
 fi
+
+log_info "Starting SMTP Open Relay Attack - ID: $ATTACK_ID"
+
+# 필수 명령어 확인
+check_required_commands swaks nc ping || exit 1
 
 # 설정 변수
 TARGET="mail-postfix"
 TARGET_IP="$TARGET"
-
-echo "INFO: TARGET=$TARGET, TARGET_IP=$TARGET_IP"
-
-# 네트워크 디버깅 추가 (공격 전)
-echo "DEBUG: Network debugging before attack..."
-echo "DEBUG: Checking DNS resolution..."
-nslookup mail-postfix || echo "DEBUG: nslookup failed"
-echo "DEBUG: Checking network connectivity..."
-ping -c 1 mail-postfix || echo "DEBUG: ping failed"
-echo "DEBUG: Checking port connectivity..."
-nc -zv mail-postfix 25 -w 5
-
 PORT=25
-# DNS 조회 실패를 피하기 위해 로컬 도메인 사용
 FROM="attacker@external.com"
-TO="root@localhost"  # 기존: "victim@localhost"에서 변경
+TO="postmaster@localhost"  # 일반적으로 존재하는 메일박스
 SUBJECT="Open Relay Test"
 BODY="This is an open relay test."
+
+log_info "Target: $TARGET:$PORT"
+
+# 로그 설정
 LOG_DIR="/artifacts"
 LOG_FILE="${LOG_DIR}/openrelay_${ATTACK_ID}.log"
+ensure_directory "$LOG_DIR"
+safe_logfile "$LOG_FILE"
 
-mkdir -p "$LOG_DIR"
+# 네트워크 연결성 사전 확인
+log_step "Performing network connectivity checks..."
+test_dns_resolution "$TARGET" || log_warn "DNS resolution failed for $TARGET"
+test_network_connectivity "$TARGET" "$PORT" 10 || {
+    log_error "Cannot connect to $TARGET:$PORT"
+    exit 1
+}
 
 # 1. 공격 시작 로그
-CURRENT_ISO_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M%SZ")
-START_INFO_JSON=$(cat <<EOF
+log_step "Starting open relay attack..."
+START_INFO_JSON=$(generate_experiment_json "$ATTACK_ID" "attack_start" "RUNNING" "Open relay test started")
+echo "$START_INFO_JSON" >> "$LOG_FILE"
+
+# 추가 상세 정보 로깅
+DETAILED_START_JSON=$(cat <<EOF
 {
-"event_type": "attack_start",
-"attack_id": "$ATTACK_ID",
-"timestamp_utc": "$CURRENT_ISO_TIMESTAMP",
-"target_host": "$TARGET",
-"target_port": $PORT,
-"from_address": "$FROM",
-"to_address": "$TO",
-"subject": "$SUBJECT",
-"body_preview": "$(echo "$BODY" | head -c 50)"
+    "event_type": "attack_start_details",
+    "attack_id": "$ATTACK_ID",
+    "timestamp_utc": "$(iso8601_now)",
+    "target_host": "$TARGET",
+    "target_port": $PORT,
+    "from_address": "$FROM",
+    "to_address": "$TO",
+    "subject": "$SUBJECT",
+    "body_preview": "$(echo "$BODY" | head -c 50)"
 }
 EOF
 )
-echo "$START_INFO_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
+echo "$DETAILED_START_JSON" >> "$LOG_FILE"
 
-# 네트워크 연결 테스트
-NC_TEST_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M%SZ")
-NC_OUTPUT_FILE=$(mktemp "${LOG_DIR}/nc_output_${ATTACK_ID}_XXXXXX.tmp")
-echo "INFO: Attempting to connect to $TARGET:$PORT with netcat..." >> "$NC_OUTPUT_FILE"
-if nc -zv "$TARGET" "$PORT" -w 5 >> "$NC_OUTPUT_FILE" 2>&1; then
-  NC_EXIT_CODE=0
-  NC_STATUS="SUCCESS"
-  echo "INFO: Netcat connection to $TARGET:$PORT successful." >> "$NC_OUTPUT_FILE"
-else
-  NC_EXIT_CODE=$?
-  NC_STATUS="FAILURE"
-fi
-NC_RAW_OUTPUT=$(awk '{printf "%s\\n", $0}' "$NC_OUTPUT_FILE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | sed '$ s/\\n$//')
-rm "$NC_OUTPUT_FILE"
-
-NC_TEST_JSON=$(cat <<EOF
-{
-"event_type": "network_connectivity_test",
-"attack_id": "$ATTACK_ID",
-"timestamp_utc": "$NC_TEST_TIMESTAMP",
-"target_host": "$TARGET",
-"target_port": $PORT,
-"tool": "netcat",
-"exit_code": $NC_EXIT_CODE,
-"status": "$NC_STATUS",
-"raw_output": "$NC_RAW_OUTPUT"
-}
-EOF
-)
-echo "$NC_TEST_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
-
-# 연결 대기
-echo "INFO: Waiting for mail server to be ready..."
-for attempt in {1..10}; do
-    if nc -zv "$TARGET_IP" "$PORT" -w 5 >/dev/null 2>&1; then
-        echo "INFO: Mail server ready on attempt $attempt"
-        break
-    fi
-    echo "INFO: Attempt $attempt/10 failed, retrying in 2 seconds..."
-    sleep 2
-    if [ $attempt -eq 10 ]; then
-        echo "ERROR: Mail server not ready after 10 attempts"
-        exit 1
-    fi
-done
-
-# SWAKS 옵션
+# 2. SWAKS 옵션 구성
+log_step "Configuring SWAKS options..."
 SWAKS_OPTS=(
   --to "$TO"
   --from "$FROM"
@@ -110,92 +80,109 @@ SWAKS_OPTS=(
   --suppress-data
 )
 
-echo "DEBUG: SWAKS_OPTS array: ${SWAKS_OPTS[@]}"
-echo "DEBUG: About to run swaks command..."
+log_info "SWAKS options: ${SWAKS_OPTS[*]}"
 
-# swaks 실행
-SWAKS_OUTPUT_FILE=$(mktemp "${LOG_DIR}/swaks_raw_${ATTACK_ID}_XXXXXX.tmp")
-swaks "${SWAKS_OPTS[@]}" > "$SWAKS_OUTPUT_FILE" 2>&1
+# 3. SWAKS 실행
+log_step "Executing SWAKS attack..."
+TEMP_OUTPUT=$(mktemp)
+TEMP_FILES="$TEMP_FILES $TEMP_OUTPUT"
+
+# SWAKS 실행 - exit code를 별도로 처리
+set +e  # 일시적으로 errexit 비활성화
+swaks "${SWAKS_OPTS[@]}" > "$TEMP_OUTPUT" 2>&1
 EXIT_CODE=$?
-echo "DEBUG: swaks command finished with exit code: $EXIT_CODE"
+set -e  # errexit 다시 활성화
 
-# swaks 출력 처리
-SWAKS_RAW_OUTPUT=$(awk '{printf "%s\\n", $0}' "$SWAKS_OUTPUT_FILE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | sed '$ s/\\n$//')
-rm "$SWAKS_OUTPUT_FILE"
+log_info "SWAKS finished with exit code: $EXIT_CODE"
 
-# 2. SMTP 트랜잭션 로그
-CURRENT_ISO_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M%SZ")
+# SWAKS 출력 처리 (JSON 안전 형태로 변환)
+SWAKS_RAW_OUTPUT=$(awk '{printf "%s\\n", $0}' "$TEMP_OUTPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | sed '$ s/\\n$//')
+
+# 임시 파일 즉시 정리
+rm -f "$TEMP_OUTPUT" && log_info "Removed temporary file: $TEMP_OUTPUT" || true
+
+# 4. SMTP 트랜잭션 결과 로깅
 SMTP_RESULT_JSON=$(cat <<EOF
 {
-"event_type": "smtp_transaction",
-"attack_id": "$ATTACK_ID",
-"timestamp_utc": "$CURRENT_ISO_TIMESTAMP",
-"swaks_exit_code": $EXIT_CODE,
-"swaks_raw_output": "$SWAKS_RAW_OUTPUT"
+    "event_type": "smtp_transaction",
+    "attack_id": "$ATTACK_ID",
+    "timestamp_utc": "$(iso8601_now)",
+    "swaks_exit_code": $EXIT_CODE,
+    "swaks_raw_output": "$SWAKS_RAW_OUTPUT"
 }
 EOF
 )
-echo "$SMTP_RESULT_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
+echo "$SMTP_RESULT_JSON" >> "$LOG_FILE"
 
-# 결과 분석
+# 5. 결과 분석
+log_step "Analyzing attack results..."
 RESULT_STATUS=""
 RESULT_MESSAGE=""
 
-# swaks 종료 코드별 분석
 case $EXIT_CODE in
     0)
         RESULT_STATUS="SUCCESS"
         RESULT_MESSAGE="오픈 릴레이 취약점 확인됨: SMTP 명령 실행 성공"
+        log_warn "VULNERABLE: Open relay detected!"
         ;;
     23|24|25)
         if echo "$SWAKS_RAW_OUTPUT" | grep -q "reject_unauth_destination"; then
             RESULT_STATUS="BLOCKED"
             RESULT_MESSAGE="오픈 릴레이 차단됨: reject_unauth_destination 정책으로 외부 릴레이 거부"
+            log_info "SECURE: Open relay properly blocked by policy"
         elif echo "$SWAKS_RAW_OUTPUT" | grep -q "Relay access denied"; then
             RESULT_STATUS="BLOCKED"
             RESULT_MESSAGE="오픈 릴레이 차단됨: 릴레이 접근 거부"
+            log_info "SECURE: Relay access properly denied"
         elif echo "$SWAKS_RAW_OUTPUT" | grep -q "554.*5.7.1"; then
             RESULT_STATUS="BLOCKED"
             RESULT_MESSAGE="오픈 릴레이 차단됨: 릴레이 정책으로 거부됨"
+            log_info "SECURE: Relay blocked by security policy"
+        elif echo "$SWAKS_RAW_OUTPUT" | grep -q "Access denied"; then
+            RESULT_STATUS="BLOCKED"
+            RESULT_MESSAGE="오픈 릴레이 차단됨: 클라이언트 호스트 접근 거부"
+            log_info "SECURE: Client host access properly denied"
         else
-            RESULT_STATUS="PARTIAL_SUCCESS"
-            RESULT_MESSAGE="SMTP 연결 성공, 일부 제한 적용됨 (종료 코드: $EXIT_CODE)"
+            RESULT_STATUS="BLOCKED"
+            RESULT_MESSAGE="오픈 릴레이 차단됨: SMTP 연결 거부됨 (종료 코드: $EXIT_CODE)"
+            log_info "SECURE: Open relay blocked (exit code: $EXIT_CODE)"
         fi
         ;;
     *)
         RESULT_STATUS="FAILURE"
         RESULT_MESSAGE="SMTP 테스트 실행 오류 (종료 코드: $EXIT_CODE)"
+        log_error "FAILED: SMTP test execution error"
         ;;
 esac
 
-# 3. 공격 종료 로그
-CURRENT_ISO_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M%SZ")
-END_INFO_JSON=$(cat <<EOF
-{
-"event_type": "attack_end",
-"attack_id": "$ATTACK_ID",
-"timestamp_utc": "$CURRENT_ISO_TIMESTAMP",
-"final_exit_code": $EXIT_CODE,
-"result_status": "$RESULT_STATUS",
-"result_message": "$RESULT_MESSAGE"
-}
-EOF
-)
-echo "$END_INFO_JSON" | sed 's/^[[:space:]]*//' >> "$LOG_FILE"
+# 6. 공격 종료 로그
+END_INFO_JSON=$(generate_experiment_json "$ATTACK_ID" "attack_end" "$RESULT_STATUS" "$RESULT_MESSAGE")
+echo "$END_INFO_JSON" >> "$LOG_FILE"
 
-# 요약 로그
+# 7. 요약 로그 생성
 SUMMARY_LOG="${LOG_DIR}/openrelay_summary.log"
+safe_logfile "$SUMMARY_LOG"
 echo "$(date '+%Y-%m-%d %H:%M:%S') [$ATTACK_ID] Target: $TARGET:$PORT, Result: $RESULT_STATUS (ExitCode: $EXIT_CODE)" >> "$SUMMARY_LOG"
 
-echo ""
-echo "공격 테스트 완료. 로그 저장 위치: $LOG_FILE (NDJSON 형식)"
-echo "공격 ID: $ATTACK_ID (패킷 캡처와 연계 시 사용)"
+# 8. 결과 출력
+log_info "=== Attack Summary ==="
+log_info "Attack ID: $ATTACK_ID"
+log_info "Target: $TARGET:$PORT"
+log_info "Status: $RESULT_STATUS"
+log_info "Message: $RESULT_MESSAGE"
+log_info "Log file: $LOG_FILE"
 
-# 성공한 경우에만 exit 0, 나머지는 원래 exit code 유지
-if [ "$RESULT_STATUS" = "SUCCESS" ] || [ "$RESULT_STATUS" = "BLOCKED" ] || [ "$RESULT_STATUS" = "PARTIAL_SUCCESS" ]; then
-    echo "INFO: Test completed successfully (Status: $RESULT_STATUS)"
-    exit 0
-else
-    echo "WARNING: Test failed with exit code $EXIT_CODE. See $LOG_FILE for details."
-    exit $EXIT_CODE
-fi
+# 9. 스크립트 완료
+show_script_completion "attack_openrelay.sh" "$SCRIPT_START_TIME"
+
+# 10. 적절한 종료 코드 반환
+case "$RESULT_STATUS" in
+    "SUCCESS"|"BLOCKED"|"PARTIAL_SUCCESS")
+        log_info "Test completed successfully (Status: $RESULT_STATUS)"
+        exit 0
+        ;;
+    *)
+        log_error "Test failed with exit code $EXIT_CODE"
+        exit "$EXIT_CODE"
+        ;;
+esac

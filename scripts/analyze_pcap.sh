@@ -1,27 +1,40 @@
 #!/bin/bash
+# PCAP 파일에서 SMTP 명령어 추출 스크립트 - Enhanced with common utilities
 
-# PCAP 파일에서 SMTP 명령어 추출 스크립트
-# analyze_pcap.sh - SMTP 패킷 캡처 파일에서 SMTP 명령어 및 응답 추출
+# 공통 함수 로드
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/utils.sh"
+
+# 공통 초기화
+init_common
+SCRIPT_START_TIME=$(date +%s)
 
 # 사용법 검사
 if [ $# -lt 1 ]; then
-    echo "사용법: $0 <pcap_파일> [결과_파일]"
-    echo "예: $0 /artifacts/smtp_ORT-20250508_123456.pcap /artifacts/analysis_ORT-20250508_123456.txt"
+    log_error "Usage: $0 <pcap_file> [output_file]"
+    log_info "Example: $0 /artifacts/smtp_ORT-20250508_123456.pcap /artifacts/analysis_ORT-20250508_123456.txt"
     exit 1
 fi
 
+log_info "Starting PCAP analysis"
+
+# 필수 명령어 확인
+check_required_commands tshark || exit 1
+
 # 인자 처리
 PCAP_FILE="$1"
-OUTPUT_FILE="${2:-${PCAP_FILE%.*}_analysis.txt}"  # 기본값: 원본 파일명에 _analysis 접미사 추가
+OUTPUT_FILE="${2:-${PCAP_FILE%.*}_analysis.txt}"
+
+log_info "Input PCAP: $PCAP_FILE"
+log_info "Output file: $OUTPUT_FILE"
 
 # 입력 PCAP 파일 검증
 if [ ! -f "$PCAP_FILE" ]; then
-    echo "오류: PCAP 파일 '$PCAP_FILE'을(를) 찾을 수 없습니다." >&2
-    CURRENT_ISO_TIMESTAMP_ERR=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    log_error "PCAP file not found: $PCAP_FILE"
     ATTACK_ID_ERR=$(basename "$PCAP_FILE" | grep -oP 'EXP_[0-9_]+' || echo "UNKNOWN_ATTACK_ID_NO_PCAP")
     cat > "$OUTPUT_FILE" <<EOF
 # SMTP 패킷 분석 보고서
-- 분석 시간: $CURRENT_ISO_TIMESTAMP_ERR
+- 분석 시간: $(iso8601_now)
 - 공격 ID: $ATTACK_ID_ERR
 - 분석 파일: $PCAP_FILE
 - 오류: PCAP 파일 '$PCAP_FILE'을(를) 찾을 수 없습니다. 패킷 캡처 단계에서 문제가 발생했을 수 있습니다.
@@ -35,149 +48,191 @@ if [ ! -f "$PCAP_FILE" ]; then
 \`\`\`
 (파일 없음)
 \`\`\`
-
-## 메타데이터 및 통계
-- 총 패킷 수: 0
-- SMTP 관련 패킷 수: 0
-
-### SMTP 명령어 통계:
-\`\`\`
-(파일 없음)
-\`\`\`
-
-## JSON 요약
-\`\`\`json
-{
-    "event_type": "smtp_analysis_error",
-    "attack_id": "$ATTACK_ID_ERR",
-    "timestamp_utc": "$CURRENT_ISO_TIMESTAMP_ERR",
-    "pcap_file": "$PCAP_FILE",
-    "output_file": "$OUTPUT_FILE",
-    "error_message": "PCAP file not found"
-}
-\`\`\`
 EOF
-    exit 3
+    exit 1
 fi
 
-if [ ! -s "$PCAP_FILE" ]; then
-    echo "경고: PCAP 파일 '$PCAP_FILE'의 크기가 0입니다. 캡처된 패킷이 없을 수 있습니다." >&2
-    # 분석 파일에도 경고 기록 (진행은 하되, 내용은 비어있을 것임)
-    CURRENT_ISO_TIMESTAMP_WARN=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    ATTACK_ID_WARN=$(basename "$PCAP_FILE" | grep -oP 'EXP_[0-9_]+' || echo "UNKNOWN_ATTACK_ID_EMPTY_PCAP")
+# PCAP 파일 유효성 검증
+log_info "Validating PCAP file integrity..."
+
+# 파일 크기 검증
+PCAP_SIZE=$(stat -c%s "$PCAP_FILE" 2>/dev/null || stat -f%z "$PCAP_FILE" 2>/dev/null || echo "0")
+if [ "$PCAP_SIZE" -eq 0 ]; then
+    log_error "PCAP file is empty: $PCAP_FILE"
+    ATTACK_ID_ERR=$(basename "$PCAP_FILE" | grep -oP 'EXP_[0-9_]+' || echo "UNKNOWN_ATTACK_ID_EMPTY")
     cat > "$OUTPUT_FILE" <<EOF
 # SMTP 패킷 분석 보고서
-- 분석 시간: $CURRENT_ISO_TIMESTAMP_WARN
-- 공격 ID: $ATTACK_ID_WARN
+- 분석 시간: $(iso8601_now)
+- 공격 ID: $ATTACK_ID_ERR
 - 분석 파일: $PCAP_FILE
-- 경고: PCAP 파일의 크기가 0입니다. 캡처된 패킷이 없습니다. 공격이 실행되지 않았거나, 필터 조건에 맞는 트래픽이 발생하지 않았을 수 있습니다.
+- 오류: PCAP 파일이 비어있습니다. 패킷 캡처가 제대로 수행되지 않았을 수 있습니다.
 
 ## SMTP 명령 및 응답 시퀀스
 \`\`\`
-(내용 없음 - PCAP 파일 비어있음)
+(빈 파일)
 \`\`\`
 
 ## 메일 내용 (있는 경우)
 \`\`\`
-(내용 없음 - PCAP 파일 비어있음)
+(빈 파일)
 \`\`\`
+EOF
+    exit 1
+fi
+
+# tshark으로 파일 유효성 검증 (손상된 파일 감지)
+log_info "Checking PCAP file validity with tshark..."
+if ! tshark -r "$PCAP_FILE" -c 1 >/dev/null 2>&1; then
+    log_warn "PCAP file appears to be corrupted or incomplete: $PCAP_FILE"
+    ATTACK_ID_ERR=$(basename "$PCAP_FILE" | grep -oP 'EXP_[0-9_]+' || echo "UNKNOWN_ATTACK_ID_CORRUPT")
+    cat > "$OUTPUT_FILE" <<EOF
+# SMTP 패킷 분석 보고서
+- 분석 시간: $(iso8601_now)
+- 공격 ID: $ATTACK_ID_ERR
+- 분석 파일: $PCAP_FILE
+- 파일 크기: $PCAP_SIZE bytes
+- 오류: PCAP 파일이 손상되었거나 불완전합니다. 패킷 캡처가 제대로 종료되지 않았을 수 있습니다.
+
+## SMTP 명령 및 응답 시퀀스
+\`\`\`
+(손상된 파일 - 분석 불가)
+\`\`\`
+
+## 메일 내용 (있는 경우)
+\`\`\`
+(손상된 파일 - 분석 불가)
+\`\`\`
+
+## 권장사항
+1. 패킷 캡처 프로세스가 제대로 종료되었는지 확인
+2. tcpdump 프로세스를 SIGTERM으로 안전하게 종료
+3. 디스크 공간 및 권한 확인
+EOF
+    exit 2
+fi
+
+log_info "PCAP file validation passed (size: $PCAP_SIZE bytes)"
+
+# ATTACK_ID 추출
+ATTACK_ID=$(basename "$PCAP_FILE" | grep -oP 'EXP_[0-9_]+' || echo "UNKNOWN_ATTACK_ID")
+
+# 임시 파일 설정
+TEMP_FILE="/tmp/smtp_analysis_$$.txt"
+
+# 종료 시 임시 파일 정리
+cleanup_analysis() {
+    rm -f "$TEMP_FILE"
+}
+trap cleanup_analysis EXIT INT TERM
+
+# 패킷 통계 수집
+log_info "Gathering packet statistics..."
+TOTAL_PACKETS=$(tshark -r "$PCAP_FILE" -q -z io,stat,0 2>/dev/null | grep -E "^\|.*\|.*\|.*\|$" | tail -1 | awk -F'|' '{gsub(/[ \t]/, "", $3); print $3}' 2>/dev/null || echo "0")
+SMTP_PACKETS=$(tshark -r "$PCAP_FILE" -Y "tcp.port==25 or tcp.port==587 or tcp.port==465" 2>/dev/null | wc -l || echo "0")
+
+# SMTP 트래픽 추출
+log_info "Extracting SMTP traffic..."
+tshark -r "$PCAP_FILE" -Y "tcp.port==25 or tcp.port==587 or tcp.port==465" -T fields -e frame.time -e ip.src -e ip.dst -e tcp.srcport -e tcp.dstport -e tcp.payload 2>/dev/null > "$TEMP_FILE" || {
+    log_warn "Failed to extract SMTP traffic, creating empty analysis"
+    touch "$TEMP_FILE"
+}
+
+# 메일 내용 추출 시도
+log_info "Attempting to extract mail content..."
+MAIL_CONTENT=""
+if [ -s "$TEMP_FILE" ]; then
+    MAIL_CONTENT=$(tshark -r "$PCAP_FILE" -Y "smtp" -T fields -e smtp.req.command -e smtp.response.code -e smtp.response.parameter 2>/dev/null | head -20 || echo "")
+fi
+
+# SMTP 명령어 시퀀스 추출 (개선된 버전)
+SMTP_COMMANDS=$(tshark -r "$PCAP_FILE" -Y "smtp.req.command" -T fields -e smtp.req.command -e smtp.req.parameter 2>/dev/null | head -20 || echo "")
+SMTP_RESPONSES=$(tshark -r "$PCAP_FILE" -Y "smtp.response" -T fields -e smtp.response.code 2>/dev/null | head -20 || echo "")
+
+# SMTP 응답 코드 상세 분석
+RESPONSE_2XX=$(echo "$SMTP_RESPONSES" | grep -c "^2[0-9][0-9]" 2>/dev/null || echo "0")
+RESPONSE_4XX=$(echo "$SMTP_RESPONSES" | grep -c "^4[0-9][0-9]" 2>/dev/null || echo "0")
+RESPONSE_5XX=$(echo "$SMTP_RESPONSES" | grep -c "^5[0-9][0-9]" 2>/dev/null || echo "0")
+
+# 보안 관련 응답 분석
+RELAY_DENIALS=$(echo "$SMTP_RESPONSES" | grep -c "554\|550" 2>/dev/null || echo "0")
+AUTH_FAILURES=$(tshark -r "$PCAP_FILE" -Y "smtp" -T fields -e smtp.response.parameter 2>/dev/null | grep -ci "authentication\|access denied" || echo "0")
+
+# 분석 결과 생성
+log_info "Generating analysis report..."
+cat > "$OUTPUT_FILE" <<EOF
+# SMTP 패킷 분석 보고서
+- 분석 시간: $(iso8601_now)
+- 공격 ID: $ATTACK_ID
+- 분석 파일: $PCAP_FILE
+- 파일 크기: $PCAP_SIZE bytes
 
 ## 메타데이터 및 통계
-- 총 패킷 수: 0
-- SMTP 관련 패킷 수: 0
+- 총 패킷 수: $TOTAL_PACKETS
+- SMTP 관련 패킷 수: $SMTP_PACKETS
 
-### SMTP 명령어 통계:
+## SMTP 명령 및 응답 시퀀스
 \`\`\`
-(내용 없음 - PCAP 파일 비어있음)
+$(if [ -n "$SMTP_COMMANDS" ] || [ -n "$SMTP_RESPONSES" ]; then
+    echo "=== SMTP 명령어 ==="
+    echo "$SMTP_COMMANDS"
+    echo ""
+    echo "=== SMTP 응답 ==="
+    echo "$SMTP_RESPONSES"
+    echo ""
+    echo "=== 응답 코드 통계 ==="
+    echo "- 2xx (성공): $RESPONSE_2XX"
+    echo "- 4xx (일시적 실패): $RESPONSE_4XX"
+    echo "- 5xx (영구적 실패): $RESPONSE_5XX"
+    echo "- 릴레이/액세스 거부: $RELAY_DENIALS"
+    echo "- 인증 실패: $AUTH_FAILURES"
+    echo ""
+    echo "=== 전체 SMTP 트래픽 ==="
+    echo "$MAIL_CONTENT"
+else
+    echo "(SMTP 트래픽이 감지되지 않았습니다)"
+fi)
+\`\`\`
+
+## 메일 내용 (있는 경우)
+\`\`\`
+$(if [ -s "$TEMP_FILE" ]; then
+    echo "패킷 수: $SMTP_PACKETS"
+    echo "상세 내용은 tshark 분석 필요"
+else
+    echo "(캡처된 메일 내용 없음)"
+fi)
 \`\`\`
 
 ## JSON 요약
 \`\`\`json
 {
-    "event_type": "smtp_analysis_warning",
-    "attack_id": "$ATTACK_ID_WARN",
-    "timestamp_utc": "$CURRENT_ISO_TIMESTAMP_WARN",
-    "pcap_file": "$PCAP_FILE",
-    "output_file": "$OUTPUT_FILE",
-    "warning_message": "PCAP file is empty",
-    "total_packets": 0,
-    "smtp_packets": 0
-}
-\`\`\`
-EOF
-    # 빈 파일로 분석을 계속 진행할 수도 있지만, 여기서는 경고 후 종료하는 것이 더 명확할 수 있습니다.
-    # 또는 exit 0으로 하고 보고서에는 경고만 남길 수도 있습니다.
-    # 여기서는 일단 분석 완료 메시지를 출력하고 정상 종료합니다.
-    echo "분석 완료 (경고: PCAP 파일 비어있음): $OUTPUT_FILE"
-    exit 0 
-fi
-
-ATTACK_ID=$(basename "$PCAP_FILE" | grep -oP 'EXP_[0-9_]+' || echo "UNKNOWN_ATTACK_ID") # Makefile의 DEMO_RUN_ID 형식(EXP_날짜_시간)을 따르도록 수정
-CURRENT_ISO_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-# 필요한 도구 확인
-command -v tshark >/dev/null 2>&1 || { echo "오류: tshark가 필요합니다. apt-get install tshark로 설치하세요."; exit 2; }
-
-# 결과 파일 헤더 작성
-cat > "$OUTPUT_FILE" <<EOF
-# SMTP 패킷 분석 보고서
-- 분석 시간: $CURRENT_ISO_TIMESTAMP
-- 공격 ID: $ATTACK_ID
-- 분석 파일: $PCAP_FILE
-
-## SMTP 명령 및 응답 시퀀스
-\`\`\`
-EOF
-
-# SMTP 명령과 응답 추출 (포트 25, 465, 587)
-tshark -r "$PCAP_FILE" -Y "smtp" -T fields \
-       -e frame.time_relative \
-       -e ip.src \
-       -e ip.dst \
-       -e smtp.req.command \
-       -e smtp.req.parameter \
-       -e smtp.response.code \
-       -e data.text \
-       -E header=y -E separator=" | " -E quote=n | sort -n >> "$OUTPUT_FILE"
-echo "" >> "$OUTPUT_FILE"
-echo "\`\`\`" >> "$OUTPUT_FILE"
-
-# 메일 내용 추출 (DATA 명령 이후의 내용)
-echo -e "\n## 메일 내용 (있는 경우)\n\`\`\`" >> "$OUTPUT_FILE"
-tshark -r "$PCAP_FILE" -Y "smtp.data.fragment" \
-       -T fields -e smtp.data.fragment \
-       -E header=n -E quote=n >> "$OUTPUT_FILE"
-echo -e "\`\`\`\n" >> "$OUTPUT_FILE"
-
-# 메타데이터 통계 추가
-echo -e "## 메타데이터 및 통계\n" >> "$OUTPUT_FILE"
-TOTAL_PKTS=$(tshark -r "$PCAP_FILE" -T fields -e frame.number | wc -l)
-SMTP_PKTS=$(tshark -r "$PCAP_FILE" -Y "smtp" -T fields -e frame.number | wc -l)
-SMTP_CMDS=$(tshark -r "$PCAP_FILE" -Y "smtp.req.command" -T fields -e smtp.req.command | sort | uniq -c | sort -nr)
-
-echo "- 총 패킷 수: $TOTAL_PKTS" >> "$OUTPUT_FILE"
-echo "- SMTP 관련 패킷 수: $SMTP_PKTS" >> "$OUTPUT_FILE"
-echo -e "\n### SMTP 명령어 통계:\n\`\`\`" >> "$OUTPUT_FILE"
-echo "$SMTP_CMDS" >> "$OUTPUT_FILE"
-echo -e "\`\`\`" >> "$OUTPUT_FILE"
-
-# JSON 형식의 요약 정보도 추가
-SUMMARY_JSON=$(cat <<EOF
-{
-    "event_type": "smtp_analysis",
+    "event_type": "smtp_analysis_complete",
     "attack_id": "$ATTACK_ID",
-    "timestamp_utc": "$CURRENT_ISO_TIMESTAMP",
+    "timestamp_utc": "$(iso8601_now)",
     "pcap_file": "$PCAP_FILE",
     "output_file": "$OUTPUT_FILE",
-    "total_packets": $TOTAL_PKTS,
-    "smtp_packets": $SMTP_PKTS
+    "statistics": {
+        "total_packets": $TOTAL_PACKETS,
+        "smtp_packets": $SMTP_PACKETS,
+        "file_size_bytes": $PCAP_SIZE,
+        "response_codes": {
+            "success_2xx": $RESPONSE_2XX,
+            "temp_failure_4xx": $RESPONSE_4XX,
+            "perm_failure_5xx": $RESPONSE_5XX,
+            "relay_denials": $RELAY_DENIALS,
+            "auth_failures": $AUTH_FAILURES
+        }
+    },
+    "analysis_status": "success"
 }
+\`\`\`
 EOF
-)
 
-echo -e "\n## JSON 요약\n\`\`\`json" >> "$OUTPUT_FILE"
-echo "$SUMMARY_JSON" >> "$OUTPUT_FILE"
-echo -e "\`\`\`" >> "$OUTPUT_FILE"
+log_info "PCAP analysis completed successfully"
+log_info "Results written to: $OUTPUT_FILE"
 
-echo "분석 완료: $OUTPUT_FILE"
+# 정리
+rm -f "$TEMP_FILE"
+
+show_script_completion "analyze_pcap.sh" $SCRIPT_START_TIME
 exit 0
