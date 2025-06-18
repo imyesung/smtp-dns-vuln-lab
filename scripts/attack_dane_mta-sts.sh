@@ -15,7 +15,7 @@ DNS_IP="172.28.0.253"
 ARTIFACTS_DIR="/artifacts"
 TIMEOUT=10
 
-# 테스트할 도메인들 (실제 환경에서는 타겟 도메인)
+# 테스트할 도메인들
 TEST_DOMAINS=(
     "localhost"
     "example.com"
@@ -27,12 +27,46 @@ TEST_DOMAINS=(
 echo "INFO: Starting DANE/MTA-STS attack - ID: $ATTACK_ID"
 echo "INFO: Testing domains for missing DANE TLSA and MTA-STS policies"
 
+# DNS 도구 확인
+if command -v dig >/dev/null 2>&1; then
+    DNS_TOOL="dig"
+elif command -v nslookup >/dev/null 2>&1; then
+    DNS_TOOL="nslookup"
+elif command -v host >/dev/null 2>&1; then
+    DNS_TOOL="host"
+else
+    echo "ERROR: No DNS query tools available"
+    exit 1
+fi
+
+echo "INFO: Using $DNS_TOOL for DNS queries"
+
+# DNS 쿼리 함수
+query_dns_record() {
+    local domain="$1"
+    local record_type="${2:-TXT}"
+    local server="$3"
+    
+    case "$DNS_TOOL" in
+        "dig")
+            timeout $TIMEOUT dig @$server $domain $record_type +short 2>/dev/null || echo "QUERY_FAILED"
+            ;;
+        "nslookup")
+            timeout $TIMEOUT nslookup -type=$record_type $domain $server 2>/dev/null | grep -E "text =|Address" | sed 's/.*text = //' || echo "QUERY_FAILED"
+            ;;
+        "host")
+            timeout $TIMEOUT host -t $record_type $domain $server 2>/dev/null | grep -E "descriptive text|address" || echo "QUERY_FAILED"
+            ;;
+    esac
+}
+
 # 1. DANE TLSA 레코드 확인
 echo "INFO: Testing for DANE TLSA records..."
 DANE_FILE="$ARTIFACTS_DIR/dane_test_$ATTACK_ID.txt"
 {
     echo "===== DANE TLSA Record Test ====="
     echo "Timestamp: $(date)"
+    echo "DNS Tool: $DNS_TOOL"
     echo "Checking for TLSA records on mail domains..."
     echo ""
 } > $DANE_FILE
@@ -47,17 +81,11 @@ for domain in "${TEST_DOMAINS[@]}"; do
     TLSA_QUERY="_25._tcp.$domain"
     echo "Testing TLSA for: $TLSA_QUERY" >> $DANE_FILE
     
-    if timeout $TIMEOUT dig @$DNS_IP $TLSA_QUERY TLSA +short >> $DANE_FILE 2>&1; then
-        # 응답 확인
-        TLSA_RESULT=$(tail -5 $DANE_FILE | grep -v "Testing" | grep -v "^$" | head -1)
-        if [ -n "$TLSA_RESULT" ] && [ "$TLSA_RESULT" != ";;" ]; then
-            echo "FOUND TLSA: $TLSA_RESULT" >> $DANE_FILE
-        else
-            echo "NO TLSA: No TLSA record found for $domain" >> $DANE_FILE
-            DANE_MISSING_COUNT=$((DANE_MISSING_COUNT + 1))
-        fi
+    TLSA_RESULT=$(query_dns_record "$TLSA_QUERY" "TLSA" "$DNS_IP")
+    if [[ "$TLSA_RESULT" != "QUERY_FAILED" && -n "$TLSA_RESULT" ]]; then
+        echo "FOUND TLSA: $TLSA_RESULT" >> $DANE_FILE
     else
-        echo "ERROR: Query failed for $domain" >> $DANE_FILE
+        echo "NO TLSA: No TLSA record found for $domain" >> $DANE_FILE
         DANE_MISSING_COUNT=$((DANE_MISSING_COUNT + 1))
     fi
     
@@ -65,15 +93,11 @@ for domain in "${TEST_DOMAINS[@]}"; do
     TLSA_QUERY_587="_587._tcp.$domain"
     echo "Testing TLSA for: $TLSA_QUERY_587" >> $DANE_FILE
     
-    if timeout $TIMEOUT dig @$DNS_IP $TLSA_QUERY_587 TLSA +short >> $DANE_FILE 2>&1; then
-        TLSA_RESULT_587=$(tail -5 $DANE_FILE | grep -v "Testing" | grep -v "^$" | head -1)
-        if [ -n "$TLSA_RESULT_587" ] && [ "$TLSA_RESULT_587" != ";;" ]; then
-            echo "FOUND TLSA (587): $TLSA_RESULT_587" >> $DANE_FILE
-        else
-            echo "NO TLSA (587): No TLSA record found for port 587" >> $DANE_FILE
-        fi
+    TLSA_RESULT_587=$(query_dns_record "$TLSA_QUERY_587" "TLSA" "$DNS_IP")
+    if [[ "$TLSA_RESULT_587" != "QUERY_FAILED" && -n "$TLSA_RESULT_587" ]]; then
+        echo "FOUND TLSA (587): $TLSA_RESULT_587" >> $DANE_FILE
     else
-        echo "ERROR: Query failed for $domain port 587" >> $DANE_FILE
+        echo "NO TLSA (587): No TLSA record found for port 587" >> $DANE_FILE
     fi
     
     echo "---" >> $DANE_FILE
@@ -85,6 +109,7 @@ MTA_STS_FILE="$ARTIFACTS_DIR/mta_sts_test_$ATTACK_ID.txt"
 {
     echo "===== MTA-STS Policy Test ====="
     echo "Timestamp: $(date)"
+    echo "DNS Tool: $DNS_TOOL"
     echo "Checking for MTA-STS policies..."
     echo ""
 } > $MTA_STS_FILE
@@ -99,24 +124,23 @@ for domain in "${TEST_DOMAINS[@]}"; do
     STS_QUERY="_mta-sts.$domain"
     echo "Testing MTA-STS TXT for: $STS_QUERY" >> $MTA_STS_FILE
     
-    if timeout $TIMEOUT dig @$DNS_IP $STS_QUERY TXT +short >> $MTA_STS_FILE 2>&1; then
-        STS_RESULT=$(tail -5 $MTA_STS_FILE | grep -v "Testing" | grep -v "^$" | head -1)
-        if [ -n "$STS_RESULT" ] && [ "$STS_RESULT" != ";;" ]; then
-            echo "FOUND MTA-STS: $STS_RESULT" >> $MTA_STS_FILE
-            
-            # MTA-STS 정책 내용 확인 시도 (HTTP/HTTPS)
-            echo "Attempting to fetch MTA-STS policy for $domain..." >> $MTA_STS_FILE
+    STS_RESULT=$(query_dns_record "$STS_QUERY" "TXT" "$DNS_IP")
+    if [[ "$STS_RESULT" != "QUERY_FAILED" && -n "$STS_RESULT" ]] && echo "$STS_RESULT" | grep -qi "v=STSv1"; then
+        echo "FOUND MTA-STS: $STS_RESULT" >> $MTA_STS_FILE
+        
+        # MTA-STS 정책 내용 확인 시도 (HTTP/HTTPS)
+        echo "Attempting to fetch MTA-STS policy for $domain..." >> $MTA_STS_FILE
+        if command -v curl >/dev/null 2>&1; then
             if timeout $TIMEOUT curl -s "https://mta-sts.$domain/.well-known/mta-sts.txt" >> $MTA_STS_FILE 2>&1; then
                 echo "MTA-STS policy fetched successfully" >> $MTA_STS_FILE
             else
                 echo "FAILED: Cannot fetch MTA-STS policy file" >> $MTA_STS_FILE
             fi
         else
-            echo "NO MTA-STS: No MTA-STS record found for $domain" >> $MTA_STS_FILE
-            MTA_STS_MISSING_COUNT=$((MTA_STS_MISSING_COUNT + 1))
+            echo "curl not available - cannot fetch policy file" >> $MTA_STS_FILE
         fi
     else
-        echo "ERROR: Query failed for $domain" >> $MTA_STS_FILE
+        echo "NO MTA-STS: No MTA-STS record found for $domain" >> $MTA_STS_FILE
         MTA_STS_MISSING_COUNT=$((MTA_STS_MISSING_COUNT + 1))
     fi
     echo "---" >> $MTA_STS_FILE
@@ -128,6 +152,7 @@ TLS_RPT_FILE="$ARTIFACTS_DIR/tls_rpt_test_$ATTACK_ID.txt"
 {
     echo "===== SMTP TLS Reporting Test ====="
     echo "Timestamp: $(date)"
+    echo "DNS Tool: $DNS_TOOL"
     echo "Checking for TLS reporting policies..."
     echo ""
 } > $TLS_RPT_FILE
@@ -139,16 +164,11 @@ for domain in "${TEST_DOMAINS[@]}"; do
     RPT_QUERY="_smtp._tls.$domain"
     echo "Testing TLS-RPT for: $RPT_QUERY" >> $TLS_RPT_FILE
     
-    if timeout $TIMEOUT dig @$DNS_IP $RPT_QUERY TXT +short >> $TLS_RPT_FILE 2>&1; then
-        RPT_RESULT=$(tail -5 $TLS_RPT_FILE | grep -v "Testing" | grep -v "^$" | head -1)
-        if [ -n "$RPT_RESULT" ] && [ "$RPT_RESULT" != ";;" ]; then
-            echo "FOUND TLS-RPT: $RPT_RESULT" >> $TLS_RPT_FILE
-        else
-            echo "NO TLS-RPT: No TLS reporting record found for $domain" >> $TLS_RPT_FILE
-            TLS_RPT_MISSING_COUNT=$((TLS_RPT_MISSING_COUNT + 1))
-        fi
+    RPT_RESULT=$(query_dns_record "$RPT_QUERY" "TXT" "$DNS_IP")
+    if [[ "$RPT_RESULT" != "QUERY_FAILED" && -n "$RPT_RESULT" ]] && echo "$RPT_RESULT" | grep -qi "v=TLSRPTv1"; then
+        echo "FOUND TLS-RPT: $RPT_RESULT" >> $TLS_RPT_FILE
     else
-        echo "ERROR: Query failed for $domain" >> $TLS_RPT_FILE
+        echo "NO TLS-RPT: No TLS reporting record found for $domain" >> $TLS_RPT_FILE
         TLS_RPT_MISSING_COUNT=$((TLS_RPT_MISSING_COUNT + 1))
     fi
     echo "---" >> $TLS_RPT_FILE
@@ -174,7 +194,7 @@ SMTP_TLS_SUPPORTED=false
     echo "QUIT"
 } | timeout $TIMEOUT nc mail-postfix 25 >> $TLS_TEST_FILE 2>&1
 
-if grep -q "220.*ready for tls" $TLS_TEST_FILE || grep -q "STARTTLS" $TLS_TEST_FILE; then
+if grep -q "220.*ready for tls\|STARTTLS" $TLS_TEST_FILE; then
     SMTP_TLS_SUPPORTED=true
     echo "TLS SUPPORTED: SMTP server supports STARTTLS" >> $TLS_TEST_FILE
 else
@@ -187,6 +207,7 @@ SUMMARY_FILE="$ARTIFACTS_DIR/dane_mta_sts_summary_$ATTACK_ID.txt"
 {
     echo "===== DANE/MTA-STS Attack Summary ====="
     echo "Attack ID: $ATTACK_ID"
+    echo "DNS Tool Used: $DNS_TOOL"
     echo "Timestamp: $(date)"
     echo ""
     
@@ -228,6 +249,8 @@ SUMMARY_FILE="$ARTIFACTS_DIR/dane_mta_sts_summary_$ATTACK_ID.txt"
     fi
     
     echo ""
+    echo "Note: DNS queries performed with $DNS_TOOL due to tool availability"
+    
     echo "Vulnerabilities Found:"
     
     if [ $DANE_MISSING_COUNT -gt 0 ]; then
@@ -296,12 +319,5 @@ SUMMARY_FILE="$ARTIFACTS_DIR/dane_mta_sts_summary_$ATTACK_ID.txt"
 
 echo "INFO: DANE/MTA-STS attack completed. Summary:"
 cat $SUMMARY_FILE
-
-# 6. 상세 결과 표시
-echo ""
-echo "===== Detailed Results ====="
-echo "DANE TLSA Records Missing: $DANE_MISSING_COUNT domains"
-echo "MTA-STS Policies Missing: $MTA_STS_MISSING_COUNT domains"
-echo "TLS Reporting Missing: $TLS_RPT_MISSING_COUNT domains"
 
 exit 0

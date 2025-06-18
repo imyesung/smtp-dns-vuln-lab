@@ -16,7 +16,7 @@ DNS_PORT=53
 ARTIFACTS_DIR="/artifacts"
 TIMEOUT=10
 
-# 외부 테스트용 도메인들 (실제로는 응답하지 않을 것이지만 재귀 질의 테스트용)
+# 외부 테스트용 도메인들
 TEST_DOMAINS=(
     "google.com"
     "cloudflare.com"
@@ -25,18 +25,42 @@ TEST_DOMAINS=(
     "stackoverflow.com"
 )
 
-# DNS 레코드 타입들
-RECORD_TYPES=(
-    "A"
-    "AAAA"
-    "MX"
-    "TXT"
-    "NS"
-    "SOA"
-)
-
 echo "INFO: Starting DNS recursion attack - ID: $ATTACK_ID"
 echo "INFO: Target DNS: $DNS_TARGET ($DNS_IP:$DNS_PORT)"
+
+# DNS 도구 확인 및 설정
+if command -v dig >/dev/null 2>&1; then
+    DNS_TOOL="dig"
+    echo "INFO: Using dig for DNS queries"
+elif command -v nslookup >/dev/null 2>&1; then
+    DNS_TOOL="nslookup"
+    echo "INFO: Using nslookup for DNS queries"
+elif command -v host >/dev/null 2>&1; then
+    DNS_TOOL="host"
+    echo "INFO: Using host for DNS queries"
+else
+    echo "ERROR: No DNS query tools available (dig, nslookup, host)"
+    exit 1
+fi
+
+# DNS 쿼리 함수
+query_dns() {
+    local domain="$1"
+    local record_type="${2:-A}"
+    local server="$3"
+    
+    case "$DNS_TOOL" in
+        "dig")
+            timeout $TIMEOUT dig @$server $domain $record_type +short 2>/dev/null || echo "QUERY_FAILED"
+            ;;
+        "nslookup")
+            timeout $TIMEOUT nslookup -type=$record_type $domain $server 2>/dev/null | grep -E "^(Name|Address|Answer)" || echo "QUERY_FAILED"
+            ;;
+        "host")
+            timeout $TIMEOUT host -t $record_type $domain $server 2>/dev/null || echo "QUERY_FAILED"
+            ;;
+    esac
+}
 
 # 1. DNS 서버 연결 확인
 echo "INFO: Testing DNS server connectivity..."
@@ -53,12 +77,14 @@ echo "INFO: Testing basic DNS queries..."
     echo "===== Basic DNS Query Test ====="
     echo "Timestamp: $(date)"
     echo "Target: $DNS_IP:$DNS_PORT"
+    echo "DNS Tool: $DNS_TOOL"
     echo ""
 } > $ARTIFACTS_DIR/dns_basic_$ATTACK_ID.txt
 
 # 로컬 도메인 질의 (정상 동작 확인)
 echo "INFO: Querying local domain..."
-dig @$DNS_IP localhost A +short >> $ARTIFACTS_DIR/dns_basic_$ATTACK_ID.txt 2>&1 || echo "FAILED: localhost query" >> $ARTIFACTS_DIR/dns_basic_$ATTACK_ID.txt
+LOCAL_RESULT=$(query_dns "localhost" "A" "$DNS_IP")
+echo "Local query result: $LOCAL_RESULT" >> $ARTIFACTS_DIR/dns_basic_$ATTACK_ID.txt
 
 # 3. 재귀 질의 테스트 (외부 도메인)
 echo "INFO: Testing recursive queries for external domains..."
@@ -66,6 +92,7 @@ RECURSION_FILE="$ARTIFACTS_DIR/dns_recursion_$ATTACK_ID.txt"
 {
     echo "===== DNS Recursion Test ====="
     echo "Timestamp: $(date)"
+    echo "DNS Tool: $DNS_TOOL"
     echo "Testing external domain resolution..."
     echo ""
 } > $RECURSION_FILE
@@ -74,48 +101,55 @@ RECURSION_ALLOWED=false
 SUCCESSFUL_QUERIES=0
 TOTAL_QUERIES=0
 
+# 간소화된 레코드 타입 (nslookup 호환성)
+RECORD_TYPES=("A" "MX" "NS")
+
 for domain in "${TEST_DOMAINS[@]}"; do
     for record_type in "${RECORD_TYPES[@]}"; do
         TOTAL_QUERIES=$((TOTAL_QUERIES + 1))
         echo "Testing: $domain $record_type" >> $RECURSION_FILE
         
-        # dig 명령으로 재귀 질의 시도
-        if timeout $TIMEOUT dig @$DNS_IP $domain $record_type +recurse +time=5 >> $RECURSION_FILE 2>&1; then
-            # 응답에 ANSWER section이 있는지 확인
-            if tail -20 $RECURSION_FILE | grep -q "ANSWER SECTION" || tail -20 $RECURSION_FILE | grep -q "status: NOERROR"; then
-                SUCCESSFUL_QUERIES=$((SUCCESSFUL_QUERIES + 1))
-                RECURSION_ALLOWED=true
-                echo "SUCCESS: Got answer for $domain $record_type" >> $RECURSION_FILE
-            else
-                echo "FAILED: No answer for $domain $record_type" >> $RECURSION_FILE
-            fi
+        RESULT=$(query_dns "$domain" "$record_type" "$DNS_IP")
+        echo "Result: $RESULT" >> $RECURSION_FILE
+        
+        # 성공적인 응답 확인 (QUERY_FAILED가 아닌 경우)
+        if [[ "$RESULT" != "QUERY_FAILED" && -n "$RESULT" ]]; then
+            SUCCESSFUL_QUERIES=$((SUCCESSFUL_QUERIES + 1))
+            RECURSION_ALLOWED=true
+            echo "SUCCESS: Got answer for $domain $record_type" >> $RECURSION_FILE
         else
-            echo "TIMEOUT/ERROR: Query failed for $domain $record_type" >> $RECURSION_FILE
+            echo "FAILED: No answer for $domain $record_type" >> $RECURSION_FILE
         fi
         echo "---" >> $RECURSION_FILE
     done
 done
 
-# 4. DNS 증폭 공격 테스트
+# 4. DNS 증폭 공격 테스트 (단순화)
 echo "INFO: Testing DNS amplification potential..."
 AMPLIFICATION_FILE="$ARTIFACTS_DIR/dns_amplification_$ATTACK_ID.txt"
 {
     echo "===== DNS Amplification Test ====="
     echo "Timestamp: $(date)"
+    echo "DNS Tool: $DNS_TOOL"
     echo "Testing large response queries..."
     echo ""
 } > $AMPLIFICATION_FILE
 
-# ANY 쿼리 (큰 응답 유도)
 AMPLIFICATION_POTENTIAL=false
-for domain in "." "com" "net" "org"; do
-    echo "Testing ANY query for: $domain" >> $AMPLIFICATION_FILE
-    if timeout $TIMEOUT dig @$DNS_IP $domain ANY +bufsize=4096 >> $AMPLIFICATION_FILE 2>&1; then
-        # 응답 크기 확인
-        RESPONSE_SIZE=$(tail -50 $AMPLIFICATION_FILE | grep -o "MSG SIZE.*rcvd: [0-9]*" | tail -1 | grep -o "[0-9]*$")
-        if [ -n "$RESPONSE_SIZE" ] && [ "$RESPONSE_SIZE" -gt 512 ]; then
+
+# 루트 도메인과 TLD에 대한 NS 쿼리 (큰 응답 유도)
+for domain in "." "com" "net"; do
+    echo "Testing NS query for: $domain" >> $AMPLIFICATION_FILE
+    
+    NS_RESULT=$(query_dns "$domain" "NS" "$DNS_IP")
+    echo "NS Result: $NS_RESULT" >> $AMPLIFICATION_FILE
+    
+    # 응답 크기 대략적 추정 (다중 레코드가 있으면 증폭 가능성)
+    if [[ "$NS_RESULT" != "QUERY_FAILED" ]]; then
+        RESPONSE_LINES=$(echo "$NS_RESULT" | wc -l)
+        if [ "$RESPONSE_LINES" -gt 3 ]; then
             AMPLIFICATION_POTENTIAL=true
-            echo "LARGE RESPONSE: $RESPONSE_SIZE bytes for $domain ANY" >> $AMPLIFICATION_FILE
+            echo "LARGE RESPONSE: Multiple NS records for $domain (${RESPONSE_LINES} lines)" >> $AMPLIFICATION_FILE
         fi
     fi
     echo "---" >> $AMPLIFICATION_FILE
@@ -127,22 +161,24 @@ DNS_INFO_FILE="$ARTIFACTS_DIR/dns_info_$ATTACK_ID.txt"
 {
     echo "===== DNS Server Information ====="
     echo "Timestamp: $(date)"
+    echo "DNS Tool: $DNS_TOOL"
     echo ""
     
-    # 버전 정보 시도
+    # 버전 정보 시도 (CHAOS 클래스는 nslookup에서 제한적)
     echo "=== Version Query ==="
-    timeout $TIMEOUT dig @$DNS_IP version.bind CHAOS TXT 2>&1 || echo "Version query failed"
-    echo ""
-    
-    # 호스트명 정보 시도
-    echo "=== Hostname Query ==="
-    timeout $TIMEOUT dig @$DNS_IP hostname.bind CHAOS TXT 2>&1 || echo "Hostname query failed"
+    if [[ "$DNS_TOOL" == "dig" ]]; then
+        timeout $TIMEOUT dig @$DNS_IP version.bind CHAOS TXT 2>&1 || echo "Version query failed"
+    else
+        echo "Version query not supported with $DNS_TOOL"
+    fi
     echo ""
     
     # 루트 서버 질의
     echo "=== Root Servers ==="
-    timeout $TIMEOUT dig @$DNS_IP . NS 2>&1 || echo "Root NS query failed"
+    ROOT_RESULT=$(query_dns "." "NS" "$DNS_IP")
+    echo "Root NS Result: $ROOT_RESULT"
     echo ""
+    
 } > $DNS_INFO_FILE
 
 # 6. 결과 분석 및 요약
@@ -152,6 +188,7 @@ SUMMARY_FILE="$ARTIFACTS_DIR/dns_recursion_summary_$ATTACK_ID.txt"
     echo "===== DNS Recursion Attack Summary ====="
     echo "Attack ID: $ATTACK_ID"
     echo "Target DNS: $DNS_IP:$DNS_PORT"
+    echo "DNS Tool Used: $DNS_TOOL"
     echo "Timestamp: $(date)"
     echo ""
     
@@ -204,6 +241,8 @@ SUMMARY_FILE="$ARTIFACTS_DIR/dns_recursion_summary_$ATTACK_ID.txt"
     fi
     
     echo ""
+    echo "Note: Analysis performed with $DNS_TOOL due to tool availability"
+    echo ""
     echo "Artifacts generated:"
     echo "- Basic queries: dns_basic_$ATTACK_ID.txt"
     echo "- Recursion test: dns_recursion_$ATTACK_ID.txt"
@@ -215,16 +254,5 @@ SUMMARY_FILE="$ARTIFACTS_DIR/dns_recursion_summary_$ATTACK_ID.txt"
 
 echo "INFO: DNS recursion attack completed. Summary:"
 cat $SUMMARY_FILE
-
-# 7. 상세 결과 표시
-echo ""
-echo "===== Detailed Results ====="
-echo "Successful recursive queries: $SUCCESSFUL_QUERIES/$TOTAL_QUERIES"
-
-if [ $SUCCESSFUL_QUERIES -gt 0 ]; then
-    echo ""
-    echo "Sample successful queries:"
-    grep -A 2 -B 1 "SUCCESS:" $RECURSION_FILE | head -20
-fi
 
 exit 0
