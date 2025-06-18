@@ -11,106 +11,134 @@ fi
 RUN_ID="$1"
 BEFORE_ANALYSIS_FILE="$2"
 AFTER_ANALYSIS_FILE="$3"
-ARTIFACTS_DIR="$4" # 호스트 경로 기준
+ARTIFACTS_DIR="$4"
 
-REPORT_FILE="${ARTIFACTS_DIR}/security_report_${RUN_ID}.html"
+REPORT_FILE="${ARTIFACTS_DIR}/security_assessment_${RUN_ID}.html"
 GENERATED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# 공격 스크립트 실행 결과 수집 함수 (수정된 버전 - Hardening Effectiveness와 동일한 로직 사용)
+# HTML 이스케이프 함수
+escape_html() {
+    sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/"/\&quot;/g; s/'\''/\&#39;/g'
+}
+
+# 분석 파일 내용 포맷팅
+format_analysis_content() {
+    local file="$1"
+    if [ ! -f "$file" ]; then
+        echo "<p class='error'>파일을 찾을 수 없음: $file</p>"
+        return
+    fi
+    
+    local content=$(cat "$file" | escape_html)
+    echo "$content" | sed 's/^/<p>/' | sed 's/$/<\/p>/' | \
+    sed 's/=== \([^=]*\) ===/<h4>\1<\/h4>/g' | \
+    sed 's/--- \([^-]*\) ---/<h5>\1<\/h5>/g' | \
+    sed 's/^\s*$/<hr\/>/g'
+}
+
+# 환경 정보 수집
+collect_environment_info() {
+    echo "<div class='env-info'>"
+    echo "<strong>실행 환경:</strong><br>"
+    echo "Host: $(hostname)<br>"
+    echo "Date: $(date)<br>"
+    echo "Docker: $(docker --version 2>/dev/null || echo 'Not available')<br>"
+    echo "</div>"
+}
+
+# 실험 아티팩트 스캔
+scan_experiment_artifacts() {
+    local artifacts=""
+    artifacts+="<div class='artifacts-list'>"
+    artifacts+="<strong>생성된 파일:</strong><ul>"
+    
+    for file in $(find "$ARTIFACTS_DIR" -name "*${RUN_ID}*" -type f 2>/dev/null | sort); do
+        local filename=$(basename "$file")
+        local filesize=$(ls -lh "$file" | awk '{print $5}')
+        artifacts+="<li>$filename ($filesize)</li>"
+    done
+    
+    artifacts+="</ul></div>"
+    echo "$artifacts"
+}
+
+# 공격 결과 분석 (포멀한 버전)
 collect_attack_results() {
-    local attack_results=""
-    local before_suffix="_BEFORE"
-    local after_suffix="_AFTER"
+    local results=""
     
-    attack_results+="<h4>Attack Script Execution Results</h4>"
+    results+="<h3>Attack Vector Analysis</h3>"
+    results+="<div class='attack-analysis'>"
     
-    # 디버깅 정보 추가
-    attack_results+="<div style='font-size:0.75rem; color:#666; margin-bottom:8px;'>"
-    attack_results+="디버깅: RUN_ID=$RUN_ID, 검색 패턴: *${RUN_ID}*${before_suffix}*, *${RUN_ID}*${after_suffix}*"
-    attack_results+="</div>"
-    
-    # 1. Open Relay 공격 결과 (Hardening Effectiveness와 완전히 동일한 로직)
+    # Open Relay 분석
     local relay_before=$(ls "${ARTIFACTS_DIR}"/*relay*${RUN_ID}*BEFORE* 2>/dev/null | head -1)
     local relay_after=$(ls "${ARTIFACTS_DIR}"/*relay*${RUN_ID}*AFTER* 2>/dev/null | head -1)
     
-    attack_results+="<div class='attack-result'>"
-    attack_results+="<strong>Open Relay Attack:</strong><br>"
-    attack_results+="<span style='font-size:0.7rem; color:#888;'>찾는 파일: openrelay_${RUN_ID}_*.log</span><br>"
+    results+="<div class='attack-vector'>"
+    results+="<h4>Open Relay Vulnerability</h4>"
     
     if [ -f "$relay_before" ] || [ -f "$relay_after" ]; then
-        local before_status="❓ 미테스트"
-        local after_status="❓ 미테스트"
-        
-        # **Hardening Effectiveness와 동일한 분석 변수 사용**
+        local before_status="UNTESTED"
+        local after_status="UNTESTED"
         local before_success=0
         local after_success=0
         local before_blocked=0
         local after_blocked=0
         
         if [ -f "$relay_before" ]; then
-            attack_results+="<span style='font-size:0.7rem; color:#888;'>Before 파일: $(basename "$relay_before")</span><br>"
-            
             before_success=$(grep -c '"result_status".*"SUCCESS"\|250.*Ok\|메일.*성공' "$relay_before" 2>/dev/null || echo "0")
             before_blocked=$(grep -c '"result_status".*"BLOCKED"\|550\|554\|거부\|차단' "$relay_before" 2>/dev/null || echo "0")
             
-            # **동일한 판단 로직 적용**
             if [ "$before_success" -gt 0 ]; then
-                before_status="🔴 릴레이 허용"
+                before_status="VULNERABLE"
             elif [ "$before_blocked" -gt 0 ]; then
-                before_status="🟢 릴레이 차단"
-            else
-                # 로그 내용 일부 표시 (디버깅용)
-                local sample_content=$(head -3 "$relay_before" | tr '\n' ' ' | cut -c1-100)
-                attack_results+="<span style='font-size:0.6rem; color:#999;'>샘플: $sample_content...</span><br>"
+                before_status="SECURE"
             fi
         fi
         
         if [ -f "$relay_after" ]; then
-            attack_results+="<span style='font-size:0.7rem; color:#888;'>After 파일: $(basename "$relay_after")</span><br>"
-            
             after_success=$(grep -c '"result_status".*"SUCCESS"\|250.*Ok\|메일.*성공' "$relay_after" 2>/dev/null || echo "0")
             after_blocked=$(grep -c '"result_status".*"BLOCKED"\|550\|554\|거부\|차단' "$relay_after" 2>/dev/null || echo "0")
             
-            # **동일한 판단 로직 적용**
             if [ "$after_success" -gt 0 ]; then
-                after_status="🔴 릴레이 허용"
+                after_status="VULNERABLE"
             elif [ "$after_blocked" -gt 0 ]; then
-                after_status="🟢 릴레이 차단"
+                after_status="SECURE"
             fi
         fi
         
-        attack_results+="&nbsp;&nbsp;Before: $before_status | After: $after_status"
+        results+="<div class='status-comparison'>"
+        results+="<div class='status-before status-$before_status'>Before: $before_status</div>"
+        results+="<div class='status-arrow'>→</div>"
+        results+="<div class='status-after status-$after_status'>After: $after_status</div>"
+        results+="</div>"
         
-        # **Hardening Effectiveness와 완전히 동일한 개선 상태 판단**
-        if [ "$before_success" -gt 0 ] && [ "$after_blocked" -gt 0 ]; then
-            attack_results+=" <span style='color:green; font-weight:bold;'>(✅ 보안 강화됨)</span>"
-        elif [ "$before_blocked" -gt 0 ] && [ "$after_blocked" -gt 0 ]; then
-            attack_results+=" <span style='color:blue; font-weight:bold;'>(✅ 이미 안전)</span>"
-        elif [ "$before_success" -gt 0 ] && [ "$after_success" -gt 0 ]; then
-            attack_results+=" <span style='color:red; font-weight:bold;'>(❌ 여전히 취약)</span>"
-        elif [[ "$before_status" == "❓ 미테스트" || "$after_status" == "❓ 미테스트" ]]; then
-            attack_results+=" <span style='color:orange; font-weight:bold;'>(⚠️ 분석 불가)</span>"
+        # 개선 상태 판정
+        if [ "$before_status" = "VULNERABLE" ] && [ "$after_status" = "SECURE" ]; then
+            results+="<div class='improvement-status improved'>VULNERABILITY REMEDIATED</div>"
+        elif [ "$before_status" = "SECURE" ] && [ "$after_status" = "SECURE" ]; then
+            results+="<div class='improvement-status maintained'>SECURITY MAINTAINED</div>"
+        elif [ "$before_status" = "VULNERABLE" ] && [ "$after_status" = "VULNERABLE" ]; then
+            results+="<div class='improvement-status failed'>VULNERABILITY PERSISTS</div>"
+        else
+            results+="<div class='improvement-status unknown'>INCONCLUSIVE</div>"
         fi
         
-        # 디버깅 정보 추가 (Hardening Effectiveness와 동일)
-        attack_results+="<br><span style='font-size:0.6rem; color:#999;'>디버깅: before_success=$before_success, before_blocked=$before_blocked, after_success=$after_success, after_blocked=$after_blocked</span>"
+        results+="<div class='technical-details'>"
+        results+="Success Count: $before_success → $after_success<br>"
+        results+="Block Count: $before_blocked → $after_blocked"
+        results+="</div>"
         
     else
-        attack_results+="&nbsp;&nbsp;<span style='color:orange;'>⚠️ 테스트 로그 파일을 찾을 수 없음</span><br>"
-        
-        # 사용 가능한 파일 목록 표시 (디버깅)
-        local available_files=$(ls "${ARTIFACTS_DIR}"/*${RUN_ID}* 2>/dev/null | grep -E "(openrelay|relay)" | head -3)
-        if [ -n "$available_files" ]; then
-            attack_results+="<span style='font-size:0.7rem; color:#888;'>사용 가능한 파일: $available_files</span>"
-        fi
+        results+="<div class='status-comparison'>"
+        results+="<div class='status-unavailable'>TEST DATA UNAVAILABLE</div>"
+        results+="</div>"
     fi
-    attack_results+="</div>"
+    results+="</div>"
     
-    # 2. STARTTLS 다운그레이드 공격 결과 (기존 코드 유지하되 파일 찾기 로직 개선)
+    # STARTTLS 분석
     local starttls_before="${ARTIFACTS_DIR}/starttls_summary_${RUN_ID}_BEFORE.txt"
     local starttls_after="${ARTIFACTS_DIR}/starttls_summary_${RUN_ID}_AFTER.txt"
     
-    # 파일이 없으면 다른 패턴으로 검색
     if [ ! -f "$starttls_before" ]; then
         starttls_before=$(ls "${ARTIFACTS_DIR}"/*starttls*${RUN_ID}*BEFORE* 2>/dev/null | head -1)
     fi
@@ -118,44 +146,50 @@ collect_attack_results() {
         starttls_after=$(ls "${ARTIFACTS_DIR}"/*starttls*${RUN_ID}*AFTER* 2>/dev/null | head -1)
     fi
     
-    attack_results+="<div class='attack-result'>"
-    attack_results+="<strong>STARTTLS Downgrade Attack:</strong><br>"
+    results+="<div class='attack-vector'>"
+    results+="<h4>STARTTLS Downgrade Attack</h4>"
     
     if [ -f "$starttls_before" ] || [ -f "$starttls_after" ]; then
-        local before_vuln="❓ 미테스트"
-        local after_vuln="❓ 미테스트"
+        local before_vuln="UNTESTED"
+        local after_vuln="UNTESTED"
         
         if [ -f "$starttls_before" ]; then
             if grep -q "VULNERABLE\|HIGHLY VULNERABLE" "$starttls_before" 2>/dev/null; then
-                before_vuln="🔴 취약"
+                before_vuln="VULNERABLE"
             elif grep -q "SECURE" "$starttls_before" 2>/dev/null; then
-                before_vuln="🟢 안전"
+                before_vuln="SECURE"
             fi
         fi
         
         if [ -f "$starttls_after" ]; then
             if grep -q "VULNERABLE\|HIGHLY VULNERABLE" "$starttls_after" 2>/dev/null; then
-                after_vuln="🔴 취약"
+                after_vuln="VULNERABLE"
             elif grep -q "SECURE" "$starttls_after" 2>/dev/null; then
-                after_vuln="🟢 안전"
+                after_vuln="SECURE"
             fi
         fi
         
-        attack_results+="&nbsp;&nbsp;Before: $before_vuln | After: $after_vuln"
+        results+="<div class='status-comparison'>"
+        results+="<div class='status-before status-$before_vuln'>Before: $before_vuln</div>"
+        results+="<div class='status-arrow'>→</div>"
+        results+="<div class='status-after status-$after_vuln'>After: $after_vuln</div>"
+        results+="</div>"
         
-        if [[ "$before_vuln" == "🔴 취약" && "$after_vuln" == "🟢 안전" ]]; then
-            attack_results+=" <span style='color:green; font-weight:bold;'>(✅ 개선됨)</span>"
-        elif [[ "$before_vuln" == "$after_vuln" && "$before_vuln" == "🔴 취약" ]]; then
-            attack_results+=" <span style='color:red; font-weight:bold;'>(❌ 여전히 취약)</span>"
-        elif [[ "$before_vuln" == "🟢 안전" && "$after_vuln" == "🟢 안전" ]]; then
-            attack_results+=" <span style='color:blue; font-weight:bold;'>(✅ 이미 안전)</span>"
+        if [ "$before_vuln" = "VULNERABLE" ] && [ "$after_vuln" = "SECURE" ]; then
+            results+="<div class='improvement-status improved'>TLS SECURITY ENHANCED</div>"
+        elif [ "$before_vuln" = "SECURE" ] && [ "$after_vuln" = "SECURE" ]; then
+            results+="<div class='improvement-status maintained'>TLS SECURITY MAINTAINED</div>"
+        elif [ "$before_vuln" = "VULNERABLE" ] && [ "$after_vuln" = "VULNERABLE" ]; then
+            results+="<div class='improvement-status failed'>TLS VULNERABILITY PERSISTS</div>"
         fi
     else
-        attack_results+="&nbsp;&nbsp;<span style='color:orange;'>⚠️ 테스트 결과 없음</span>"
+        results+="<div class='status-comparison'>"
+        results+="<div class='status-unavailable'>TEST DATA UNAVAILABLE</div>"
+        results+="</div>"
     fi
-    attack_results+="</div>"
+    results+="</div>"
     
-    # 3. 평문 인증 공격 결과 (개선된 파일 찾기)
+    # 평문 인증 분석
     local auth_patterns=(
         "${ARTIFACTS_DIR}/auth_plain_summary_${RUN_ID}_BEFORE.txt"
         "${ARTIFACTS_DIR}/*auth*${RUN_ID}*BEFORE*.txt"
@@ -174,122 +208,105 @@ collect_attack_results() {
         fi
     done
     
-    attack_results+="<div class='attack-result'>"
-    attack_results+="<strong>Plaintext Authentication Attack:</strong><br>"
+    results+="<div class='attack-vector'>"
+    results+="<h4>Plaintext Authentication</h4>"
     
     if [ -f "$auth_before" ] || [ -f "$auth_after" ]; then
-        local before_auth="❓ 미테스트"
-        local after_auth="❓ 미테스트"
+        local before_auth="UNTESTED"
+        local after_auth="UNTESTED"
         
         if [ -f "$auth_before" ]; then
             if grep -q "HIGHLY VULNERABLE\|VULNERABLE\|235.*Authentication successful\|평문.*허용" "$auth_before" 2>/dev/null; then
-                before_auth="🔴 평문 허용"
+                before_auth="VULNERABLE"
             elif grep -q "SECURE\|530.*TLS.*required\|TLS.*필수" "$auth_before" 2>/dev/null; then
-                before_auth="🟢 TLS 필수"
+                before_auth="SECURE"
             fi
         fi
         
         if [ -f "$auth_after" ]; then
             if grep -q "HIGHLY VULNERABLE\|VULNERABLE\|235.*Authentication successful\|평문.*허용" "$auth_after" 2>/dev/null; then
-                after_auth="🔴 평문 허용"
+                after_auth="VULNERABLE"
             elif grep -q "SECURE\|530.*TLS.*required\|TLS.*필수" "$auth_after" 2>/dev/null; then
-                after_auth="🟢 TLS 필수"
+                after_auth="SECURE"
             fi
         fi
         
-        attack_results+="&nbsp;&nbsp;Before: $before_auth | After: $after_auth"
+        results+="<div class='status-comparison'>"
+        results+="<div class='status-before status-$before_auth'>Before: $before_auth</div>"
+        results+="<div class='status-arrow'>→</div>"
+        results+="<div class='status-after status-$after_auth'>After: $after_auth</div>"
+        results+="</div>"
         
-        if [[ "$before_auth" == "🔴 평문 허용" && "$after_auth" == "🟢 TLS 필수" ]]; then
-            attack_results+=" <span style='color:green; font-weight:bold;'>(✅ TLS 강제 적용)</span>"
-        elif [[ "$before_auth" == "🟢 TLS 필수" && "$after_auth" == "🟢 TLS 필수" ]]; then
-            attack_results+=" <span style='color:blue; font-weight:bold;'>(✅ 이미 안전)</span>"
+        if [ "$before_auth" = "VULNERABLE" ] && [ "$after_auth" = "SECURE" ]; then
+            results+="<div class='improvement-status improved'>TLS AUTHENTICATION ENFORCED</div>"
+        elif [ "$before_auth" = "SECURE" ] && [ "$after_auth" = "SECURE" ]; then
+            results+="<div class='improvement-status maintained'>TLS AUTHENTICATION MAINTAINED</div>"
         fi
     else
-        attack_results+="&nbsp;&nbsp;<span style='color:orange;'>⚠️ 테스트 결과 없음</span>"
+        results+="<div class='status-comparison'>"
+        results+="<div class='status-unavailable'>TEST DATA UNAVAILABLE</div>"
+        results+="</div>"
     fi
-    attack_results+="</div>"
+    results+="</div>"
     
-    # 4-6. 나머지 테스트들 (기존 로직 유지하되 "이미 안전" 케이스 추가)
-    # ...existing code for DNS, DANE, SPF/DKIM/DMARC...
-    
-    echo "$attack_results"
+    results+="</div>"
+    echo "$results"
 }
 
-# CVSS 점수 수집 함수 (수정된 버전 - 실제 하드닝 효과 반영)
+# CVSS 점수 분석 (포멀한 버전)
 collect_cvss_scores() {
     local cvss_results=""
     
-    cvss_results+="<h4>CVSS 3.1 Risk Assessment</h4>"
+    cvss_results+="<h3>Risk Assessment (CVSS 3.1)</h3>"
+    cvss_results+="<div class='cvss-analysis'>"
     
     local vulnerabilities_found=()
     local total_cvss_score=0.0
     local max_severity="None"
     
-    # 실제로 존재하는 파일들을 먼저 확인
-    local available_files=$(ls "${ARTIFACTS_DIR}"/*${RUN_ID}* 2>/dev/null)
-    cvss_results+="<div style='font-size:0.75rem; color:#666; margin-bottom:8px;'>"
-    cvss_results+="검색된 파일: $(echo "$available_files" | wc -l)개"
-    cvss_results+="</div>"
-    
-    # Open Relay 취약점 확인 (수정된 로직 - AFTER 파일 기준으로 판단)
+    # Open Relay 취약점 확인
     local relay_vuln_found=false
     local relay_after_file=$(ls "${ARTIFACTS_DIR}"/*relay*${RUN_ID}*AFTER* 2>/dev/null | head -1)
     
     if [ -f "$relay_after_file" ]; then
-        # **AFTER 파일에서 SUCCESS가 있으면 여전히 취약**
         local after_success_count=$(grep -c '"result_status".*"SUCCESS"\|250.*Ok\|250.*Message.*accepted' "$relay_after_file" 2>/dev/null || echo "0")
         if [ "$after_success_count" -gt 0 ]; then
             relay_vuln_found=true
-            cvss_results+="<div style='font-size:0.75rem; color:#666;'>Open Relay 취약점 감지됨 (AFTER 파일에서 SUCCESS 발견)</div>"
-        else
-            cvss_results+="<div style='font-size:0.75rem; color:#666;'>Open Relay 취약점 해결됨 (AFTER 파일에서 SUCCESS 없음)</div>"
         fi
     else
-        # AFTER 파일이 없으면 BEFORE 파일로 대체 판단
         for relay_file in $(find "$ARTIFACTS_DIR" -name "*relay*${RUN_ID}*" -type f 2>/dev/null); do
             local success_count=$(grep -c '"result_status".*"SUCCESS"\|250.*Ok\|250.*Message.*accepted' "$relay_file" 2>/dev/null || echo "0")
             if [ "$success_count" -gt 0 ]; then
                 relay_vuln_found=true
-                cvss_results+="<div style='font-size:0.75rem; color:#666;'>Open Relay 취약점 감지됨 (일반 파일에서 SUCCESS 발견)</div>"
                 break
             fi
         done
     fi
     
     if [ "$relay_vuln_found" = true ]; then
-        vulnerabilities_found+=("open_relay")
+        vulnerabilities_found+=("Open Relay")
         total_cvss_score=$(echo "$total_cvss_score + 7.5" | bc -l 2>/dev/null || echo "7.5")
         max_severity="High"
-        cvss_results+="<div style='font-size:0.75rem; color:#666;'>Open Relay 취약점 감지됨</div>"
-    else
-        cvss_results+="<div style='font-size:0.75rem; color:#666;'>Open Relay 취약점 없음</div>"
     fi
     
-    # STARTTLS 다운그레이드 취약점 확인
+    # STARTTLS 다운그레이드 취약점
     if find "$ARTIFACTS_DIR" -name "*starttls*${RUN_ID}*" -type f -exec grep -l "VULNERABLE\|HIGHLY VULNERABLE" {} \; 2>/dev/null | grep -q .; then
-        vulnerabilities_found+=("starttls_downgrade")
+        vulnerabilities_found+=("STARTTLS Downgrade")
         total_cvss_score=$(echo "$total_cvss_score + 8.1" | bc -l 2>/dev/null || echo "$total_cvss_score")
         max_severity="High"
     fi
     
-    # 평문 인증 취약점 확인 (패턴 확장)
+    # 평문 인증 취약점
     if find "$ARTIFACTS_DIR" -name "*auth*${RUN_ID}*" -o -name "*plaintext*${RUN_ID}*" -type f -exec grep -l "HIGHLY VULNERABLE\|235.*successful" {} \; 2>/dev/null | grep -q .; then
-        vulnerabilities_found+=("plaintext_auth")
+        vulnerabilities_found+=("Plaintext Authentication")
         total_cvss_score=$(echo "$total_cvss_score + 7.8" | bc -l 2>/dev/null || echo "$total_cvss_score")
         max_severity="High"
     fi
     
-    # DNS 재귀 취약점 확인
+    # DNS 재귀 취약점
     if find "$ARTIFACTS_DIR" -name "*dns*${RUN_ID}*" -type f -exec grep -l "VULNERABLE.*recursion\|재귀.*허용" {} \; 2>/dev/null | grep -q .; then
-        vulnerabilities_found+=("dns_recursion")
+        vulnerabilities_found+=("DNS Recursion")
         total_cvss_score=$(echo "$total_cvss_score + 5.3" | bc -l 2>/dev/null || echo "$total_cvss_score")
-        if [ "$max_severity" = "None" ]; then max_severity="Medium"; fi
-    fi
-    
-    # SPF/DKIM/DMARC 취약점 확인
-    if find "$ARTIFACTS_DIR" -name "*spf*${RUN_ID}*" -o -name "*dmarc*${RUN_ID}*" -type f -exec grep -l "VULNERABLE\|spoofing.*SUCCESS\|스푸핑.*가능" {} \; 2>/dev/null | grep -q .; then
-        vulnerabilities_found+=("email_spoofing")
-        total_cvss_score=$(echo "$total_cvss_score + 6.2" | bc -l 2>/dev/null || echo "$total_cvss_score")
         if [ "$max_severity" = "None" ]; then max_severity="Medium"; fi
     fi
     
@@ -299,156 +316,127 @@ collect_cvss_scores() {
         avg_cvss_score=$(echo "scale=1; $total_cvss_score / ${#vulnerabilities_found[@]}" | bc -l 2>/dev/null || echo "0.0")
     fi
     
-    cvss_results+="<div class='cvss-scores'>"
-    cvss_results+="<div class='cvss-score'><strong>발견된 취약점:</strong> ${#vulnerabilities_found[@]}개</div>"
-    cvss_results+="<div class='cvss-score'><strong>평균 CVSS 점수:</strong> $avg_cvss_score</div>"
-    cvss_results+="<div class='cvss-score'><strong>총합 점수:</strong> $total_cvss_score</div>"
-    cvss_results+="<div class='cvss-severity'><strong>최고 위험도:</strong> "
+    cvss_results+="<div class='cvss-summary'>"
+    cvss_results+="<div class='cvss-metric'>"
+    cvss_results+="<div class='metric-label'>Vulnerabilities Identified</div>"
+    cvss_results+="<div class='metric-value'>${#vulnerabilities_found[@]}</div>"
+    cvss_results+="</div>"
     
-    case "$max_severity" in
-        "Critical") cvss_results+="<span style='color:darkred; font-weight:bold;'>🔴 CRITICAL</span>" ;;
-        "High") cvss_results+="<span style='color:red; font-weight:bold;'>🟠 HIGH</span>" ;;
-        "Medium") cvss_results+="<span style='color:orange; font-weight:bold;'>🟡 MEDIUM</span>" ;;
-        "Low") cvss_results+="<span style='color:green; font-weight:bold;'>🟢 LOW</span>" ;;
-        *) cvss_results+="<span style='color:gray;'>❓ None</span>" ;;
-    esac
-    cvss_results+="</div></div>"
+    cvss_results+="<div class='cvss-metric'>"
+    cvss_results+="<div class='metric-label'>Average CVSS Score</div>"
+    cvss_results+="<div class='metric-value'>$avg_cvss_score</div>"
+    cvss_results+="</div>"
     
-    # 자동 계산 결과 표시
+    cvss_results+="<div class='cvss-metric'>"
+    cvss_results+="<div class='metric-label'>Maximum Severity</div>"
+    cvss_results+="<div class='metric-value severity-$max_severity'>$max_severity</div>"
+    cvss_results+="</div>"
+    cvss_results+="</div>"
+    
     if [ ${#vulnerabilities_found[@]} -gt 0 ]; then
-        cvss_results+="<div style='margin-top:12px; font-size:0.875rem;'>"
-        cvss_results+="<strong>감지된 취약점:</strong><br>"
+        cvss_results+="<div class='vulnerability-list'>"
+        cvss_results+="<h4>Identified Vulnerabilities:</h4><ul>"
         for vuln in "${vulnerabilities_found[@]}"; do
-            cvss_results+="• $vuln 취약점<br>"
+            cvss_results+="<li>$vuln</li>"
         done
-        cvss_results+="</div>"
-    else
-        cvss_results+="<div style='margin-top:12px; font-size:0.875rem; color:#666;'>"
-        cvss_results+="<strong>참고:</strong> 자동화된 스크립트 실행 결과에서 취약점이 감지되지 않았습니다.<br>"
-        cvss_results+="수동 분석이나 추가 테스트가 필요할 수 있습니다."
-        cvss_results+="</div>"
+        cvss_results+="</ul></div>"
     fi
     
+    cvss_results+="</div>"
     echo "$cvss_results"
 }
 
-# 하드닝 효과 분석 함수 (수정된 버전 - 일관된 분석 로직)
+# 하드닝 효과 분석
 collect_hardening_effectiveness() {
     local hardening_results=""
-    local before_suffix="_${RUN_ID}_BEFORE"
-    local after_suffix="_${RUN_ID}_AFTER"
     
-    hardening_results+="<h4>Security Hardening Effectiveness</h4>"
+    hardening_results+="<h3>Security Hardening Assessment</h3>"
+    hardening_results+="<div class='hardening-analysis'>"
     
     local improvements=0
     local already_secure=0
     local total_tests=0
     local detailed_analysis=""
     
-    # Open Relay 개선 확인 (Attack Results와 동일한 로직 사용)
+    # Open Relay 개선 확인
     local relay_before=$(ls "${ARTIFACTS_DIR}"/*relay*${RUN_ID}*BEFORE* 2>/dev/null | head -1)
     local relay_after=$(ls "${ARTIFACTS_DIR}"/*relay*${RUN_ID}*AFTER* 2>/dev/null | head -1)
     
     if [ -f "$relay_before" ] && [ -f "$relay_after" ]; then
         total_tests=$((total_tests + 1))
-        detailed_analysis+="<div class='measure'><strong>Open Relay 테스트:</strong> "
+        detailed_analysis+="<div class='hardening-measure'>"
+        detailed_analysis+="<div class='measure-name'>Open Relay Protection</div>"
         
         local before_success=$(grep -c '"result_status".*"SUCCESS"\|250.*Ok\|메일.*성공' "$relay_before" 2>/dev/null || echo "0")
         local after_success=$(grep -c '"result_status".*"SUCCESS"\|250.*Ok\|메일.*성공' "$relay_after" 2>/dev/null || echo "0")
         local before_blocked=$(grep -c '"result_status".*"BLOCKED"\|550\|554\|거부\|차단' "$relay_before" 2>/dev/null || echo "0")
         local after_blocked=$(grep -c '"result_status".*"BLOCKED"\|550\|554\|거부\|차단' "$relay_after" 2>/dev/null || echo "0")
         
-        # 디버깅 정보 추가
-        detailed_analysis+="<span style='font-size:0.7rem; color:#888;'>[디버깅: B_success=$before_success, B_blocked=$before_blocked, A_success=$after_success, A_blocked=$after_blocked]</span> "
-        
         if [ "$before_success" -gt 0 ] && [ "$after_blocked" -gt 0 ]; then
-            detailed_analysis+="✅ 개선됨 (취약 → 차단)"
+            detailed_analysis+="<div class='measure-status improved'>IMPLEMENTED</div>"
             improvements=$((improvements + 1))
         elif [ "$before_blocked" -gt 0 ] && [ "$after_blocked" -gt 0 ]; then
-            detailed_analysis+="✅ 이미 안전 (차단 유지)"
+            detailed_analysis+="<div class='measure-status maintained'>MAINTAINED</div>"
             already_secure=$((already_secure + 1))
         elif [ "$before_success" -gt 0 ] && [ "$after_success" -gt 0 ]; then
-            detailed_analysis+="❌ 여전히 취약 (릴레이 허용)"
+            detailed_analysis+="<div class='measure-status failed'>INEFFECTIVE</div>"
         else
-            detailed_analysis+="⚠️ 결과 불분명 (before_success=$before_success, before_blocked=$before_blocked, after_success=$after_success, after_blocked=$after_blocked)"
+            detailed_analysis+="<div class='measure-status unknown'>INCONCLUSIVE</div>"
         fi
         detailed_analysis+="</div>"
     fi
     
     # STARTTLS 개선 확인
-    local starttls_before="${ARTIFACTS_DIR}/starttls_summary${before_suffix}.txt"
-    local starttls_after="${ARTIFACTS_DIR}/starttls_summary${after_suffix}.txt"
+    local starttls_before="${ARTIFACTS_DIR}/starttls_summary_${RUN_ID}_BEFORE.txt"
+    local starttls_after="${ARTIFACTS_DIR}/starttls_summary_${RUN_ID}_AFTER.txt"
     
     if [ -f "$starttls_before" ] && [ -f "$starttls_after" ]; then
         total_tests=$((total_tests + 1))
-        detailed_analysis+="<div class='measure'><strong>STARTTLS 보안:</strong> "
+        detailed_analysis+="<div class='hardening-measure'>"
+        detailed_analysis+="<div class='measure-name'>TLS Enforcement</div>"
         
         local before_vuln=$(grep -c "VULNERABLE" "$starttls_before" 2>/dev/null || echo "0")
         local after_secure=$(grep -c "SECURE" "$starttls_after" 2>/dev/null || echo "0")
         
         if [ "$before_vuln" -gt 0 ] && [ "$after_secure" -gt 0 ]; then
-            detailed_analysis+="✅ 개선됨 (취약 → 안전)"
+            detailed_analysis+="<div class='measure-status improved'>IMPLEMENTED</div>"
             improvements=$((improvements + 1))
         elif [ "$after_secure" -gt 0 ]; then
-            detailed_analysis+="✅ 유지됨 (보안 지속)"
+            detailed_analysis+="<div class='measure-status maintained'>MAINTAINED</div>"
             already_secure=$((already_secure + 1))
         else
-            detailed_analysis+="❌ 개선 안됨"
+            detailed_analysis+="<div class='measure-status failed'>INEFFECTIVE</div>"
         fi
         detailed_analysis+="</div>"
     fi
     
-    # 평문 인증 개선 확인
-    local auth_before="${ARTIFACTS_DIR}/auth_plain_summary${before_suffix}.txt"
-    local auth_after="${ARTIFACTS_DIR}/auth_plain_summary${after_suffix}.txt"
+    # 인증 보안 개선 확인
+    local auth_before="${ARTIFACTS_DIR}/auth_plain_summary_${RUN_ID}_BEFORE.txt"
+    local auth_after="${ARTIFACTS_DIR}/auth_plain_summary_${RUN_ID}_AFTER.txt"
     
     if [ -f "$auth_before" ] && [ -f "$auth_after" ]; then
         total_tests=$((total_tests + 1))
-        detailed_analysis+="<div class='measure'><strong>인증 보안:</strong> "
+        detailed_analysis+="<div class='hardening-measure'>"
+        detailed_analysis+="<div class='measure-name'>Authentication Security</div>"
         
         local before_vuln=$(grep -c "VULNERABLE" "$auth_before" 2>/dev/null || echo "0")
         local after_secure=$(grep -c "SECURE" "$auth_after" 2>/dev/null || echo "0")
         
         if [ "$before_vuln" -gt 0 ] && [ "$after_secure" -gt 0 ]; then
-            detailed_analysis+="✅ 개선됨 (평문 허용 → TLS 필수)"
+            detailed_analysis+="<div class='measure-status improved'>IMPLEMENTED</div>"
             improvements=$((improvements + 1))
         elif [ "$after_secure" -gt 0 ]; then
-            detailed_analysis+="✅ 유지됨 (TLS 지속)"
+            detailed_analysis+="<div class='measure-status maintained'>MAINTAINED</div>"
             already_secure=$((already_secure + 1))
         else
-            detailed_analysis+="❌ 개선 안됨"
+            detailed_analysis+="<div class='measure-status failed'>INEFFECTIVE</div>"
         fi
         detailed_analysis+="</div>"
     fi
     
-    # DNS 보안 개선 확인
-    local dns_before="${ARTIFACTS_DIR}/dns_recursion_summary${before_suffix}.txt"
-    local dns_after="${ARTIFACTS_DIR}/dns_recursion_summary${after_suffix}.txt"
-    
-    if [ -f "$dns_before" ] && [ -f "$dns_after" ]; then
-        total_tests=$((total_tests + 1))
-        detailed_analysis+="<div class='measure'><strong>DNS 재귀 보안:</strong> "
-        
-        local before_vuln=$(grep -c "VULNERABLE" "$dns_before" 2>/dev/null || echo "0")
-        local after_secure=$(grep -c "SECURE" "$dns_after" 2>/dev/null || echo "0")
-        
-        if [ "$before_vuln" -gt 0 ] && [ "$after_secure" -gt 0 ]; then
-            detailed_analysis+="✅ 개선됨 (재귀 허용 → 제한)"
-            improvements=$((improvements + 1))
-        elif [ "$after_secure" -gt 0 ]; then
-            detailed_analysis+="✅ 유지됨 (제한 지속)"
-            already_secure=$((already_secure + 1))
-        else
-            detailed_analysis+="❌ 개선 안됨"
-        fi
-        detailed_analysis+="</div>"
-    fi
-    
-    hardening_results+="<div class='hardening-measures'>"
     hardening_results+="$detailed_analysis"
-    hardening_results+="</div>"
     
-    # 종합 하드닝 효과 평가 (수정된 계산)
+    # 종합 효과성 평가
     local effectiveness_percentage=0
     local total_security_actions=$((improvements + already_secure))
     
@@ -456,29 +444,51 @@ collect_hardening_effectiveness() {
         effectiveness_percentage=$(( (total_security_actions * 100) / total_tests ))
     fi
     
-    hardening_results+="<div class='hardening-status "
+    hardening_results+="<div class='effectiveness-summary'>"
+    hardening_results+="<div class='effectiveness-metric'>"
+    hardening_results+="<div class='metric-label'>Security Measures Tested</div>"
+    hardening_results+="<div class='metric-value'>$total_tests</div>"
+    hardening_results+="</div>"
     
+    hardening_results+="<div class='effectiveness-metric'>"
+    hardening_results+="<div class='metric-label'>New Implementations</div>"
+    hardening_results+="<div class='metric-value'>$improvements</div>"
+    hardening_results+="</div>"
+    
+    hardening_results+="<div class='effectiveness-metric'>"
+    hardening_results+="<div class='metric-label'>Security Maintained</div>"
+    hardening_results+="<div class='metric-value'>$already_secure</div>"
+    hardening_results+="</div>"
+    
+    hardening_results+="<div class='effectiveness-metric'>"
+    hardening_results+="<div class='metric-label'>Overall Effectiveness</div>"
+    hardening_results+="<div class='metric-value'>$effectiveness_percentage%</div>"
+    hardening_results+="</div>"
+    hardening_results+="</div>"
+    
+    # 전반적 평가
+    hardening_results+="<div class='overall-assessment "
     if [ "$effectiveness_percentage" -ge 75 ]; then
         if [ "$improvements" -gt "$already_secure" ]; then
-            hardening_results+="success'>🛡️ <strong>강력한 보안 강화</strong> (신규 ${improvements}개, 기존 ${already_secure}개, ${effectiveness_percentage}% 효과)</div>"
+            hardening_results+="excellent'>EXCELLENT - Significant security improvements implemented</div>"
         else
-            hardening_results+="success'>✅ <strong>이미 안전한 상태</strong> (기존 ${already_secure}개, 신규 ${improvements}개, ${effectiveness_percentage}% 보안)</div>"
+            hardening_results+="good'>GOOD - Strong security posture maintained</div>"
         fi
     elif [ "$effectiveness_percentage" -ge 50 ]; then
-        hardening_results+="partial'>⚠️ <strong>부분적 보안 강화</strong> (${improvements}개 개선, ${already_secure}개 유지, ${effectiveness_percentage}% 효과)</div>"
+        hardening_results+="satisfactory'>SATISFACTORY - Partial security enhancements</div>"
     elif [ "$already_secure" -gt 0 ]; then
-        hardening_results+="partial'>🔶 <strong>기본 보안 유지</strong> (${already_secure}개 항목 이미 안전, ${improvements}개 신규 개선)</div>"
+        hardening_results+="baseline'>BASELINE - Existing security measures maintained</div>"
     else
-        hardening_results+="warning'>❌ <strong>보안 강화 효과 제한적</strong> (${improvements}개 개선, ${total_tests}개 테스트)</div>"
+        hardening_results+="insufficient'>INSUFFICIENT - Limited security improvement</div>"
     fi
     
+    hardening_results+="</div>"
     echo "$hardening_results"
 }
 
 BEFORE_CONTENT_HTML=$(format_analysis_content "$BEFORE_ANALYSIS_FILE")
 AFTER_CONTENT_HTML=$(format_analysis_content "$AFTER_ANALYSIS_FILE")
 
-# 실험 결과 수집 (Git 정보 제거)
 ATTACK_RESULTS_HTML=$(collect_attack_results)
 CVSS_SCORES_HTML=$(collect_cvss_scores)
 HARDENING_EFFECTIVENESS_HTML=$(collect_hardening_effectiveness)
@@ -655,161 +665,59 @@ fi
 
 cat > "$REPORT_FILE" <<EOF
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>SMTP/DNS 취약점 분석 보고서 - $RUN_ID</title>
+    <title>Security Assessment Report - $RUN_ID</title>
     <style>
         :root {
-            --primary-dark: #2d3748;
-            --primary-light: #f7fafc;
-            --accent-blue: #4299e1;
-            --accent-teal: #38b2ac;
-            --success-green: #48bb78;
-            --warning-orange: #ed8936;
-            --error-red: #f56565;
+            --primary-navy: #1a365d;
+            --primary-blue: #2b77ad;
+            --accent-teal: #0f4c75;
+            --background-gray: #f8fafc;
+            --border-light: #e2e8f0;
             --text-dark: #2d3748;
             --text-light: #718096;
-            --border-light: #e2e8f0;
-            --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --success-green: #22543d;
+            --warning-orange: #c05621;
+            --error-red: #742a2a;
+            --secure-bg: #f0fff4;
+            --vulnerable-bg: #fff5f5;
+            --neutral-bg: #f7fafc;
         }
         
         * { box-sizing: border-box; }
         
         body { 
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             margin: 0; 
-            padding: 16px; 
-            background: linear-gradient(135deg, var(--primary-light) 0%, #edf2f7 100%);
+            padding: 20px; 
+            background: var(--background-gray);
             color: var(--text-dark); 
-            line-height: 1.5; 
-            min-height: 100vh;
+            line-height: 1.6; 
         }
         
         .container { 
-            max-width: 1400px; 
+            max-width: 1200px; 
             margin: 0 auto; 
-            display: grid; 
-            gap: 16px; 
-            grid-template-columns: 1fr;
-            padding: 0 16px;
-        }
-        
-        /* 실험 타임라인 스타일 추가 */
-        .timeline {
-            position: relative;
-            margin: 20px 0;
-        }
-        
-        .timeline::before {
-            content: '';
-            position: absolute;
-            left: 20px;
-            top: 0;
-            bottom: 0;
-            width: 2px;
-            background: var(--accent-blue);
-        }
-        
-        .timeline-item {
-            position: relative;
-            margin: 16px 0;
-            padding-left: 50px;
-        }
-        
-        .timeline-item::before {
-            content: '';
-            position: absolute;
-            left: 14px;
-            top: 8px;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: var(--accent-blue);
-            border: 3px solid white;
-            box-shadow: 0 0 0 2px var(--accent-blue);
-        }
-        
-        .timeline-commit {
             background: white;
-            padding: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             border-radius: 8px;
-            border-left: 4px solid var(--accent-blue);
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        
-        .commit-hash {
-            font-family: 'SF Mono', Monaco, monospace;
-            background: var(--border-light);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 0.875rem;
-            color: var(--accent-blue);
-        }
-        
-        .experiment-summary {
-            background: white;
-            border-radius: 12px;
-            box-shadow: var(--shadow);
-            border: 1px solid var(--border-light);
-            margin: 16px 0;
-        }
-        
-        .experiment-summary-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 12px 12px 0 0;
-        }
-        
-        .experiment-summary-content {
-            padding: 20px;
-        }
-        
-        .artifact-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 16px;
-            margin: 16px 0;
-        }
-        
-        .artifact-card {
-            background: var(--primary-light);
-            padding: 16px;
-            border-radius: 8px;
-            border: 1px solid var(--border-light);
-        }
-        
-        .artifact-card h4 {
-            margin: 0 0 12px 0;
-            color: var(--primary-dark);
-            font-size: 1rem;
-        }
-        
-        .artifact-card ul {
-            margin: 0;
-            padding-left: 20px;
-            font-size: 0.875rem;
-        }
-        
-        .artifact-card li {
-            margin: 6px 0;
+            overflow: hidden;
         }
         
         .header {
-            background: linear-gradient(135deg, var(--primary-dark) 0%, #4a5568 100%);
+            background: linear-gradient(135deg, var(--primary-navy) 0%, var(--primary-blue) 100%);
             color: white;
-            padding: 24px;
-            border-radius: 12px;
+            padding: 40px;
             text-align: center;
-            box-shadow: var(--shadow);
         }
         
         .header h1 { 
-            margin: 0 0 12px 0; 
-            font-size: 2rem; 
-            font-weight: 700; 
-            letter-spacing: -0.025em;
+            margin: 0 0 10px 0; 
+            font-size: 2.5rem; 
+            font-weight: 300;
+            letter-spacing: -0.02em;
         }
         
         .header .subtitle {
@@ -818,266 +726,431 @@ cat > "$REPORT_FILE" <<EOF
             font-weight: 400;
         }
         
-        .experiment-grid {
+        .content-section {
+            padding: 30px 40px;
+            border-bottom: 1px solid var(--border-light);
+        }
+        
+        .content-section:last-child {
+            border-bottom: none;
+        }
+        
+        .section-title {
+            font-size: 1.8rem;
+            font-weight: 600;
+            color: var(--primary-navy);
+            margin: 0 0 25px 0;
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--primary-blue);
+        }
+        
+        /* Before/After Comparison Chart */
+        .comparison-chart {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 16px;
-            margin: 16px 0;
+            grid-template-columns: 1fr auto 1fr;
+            gap: 20px;
+            margin: 20px 0;
+            align-items: center;
         }
         
-        .experiment-card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: var(--shadow);
-            overflow: hidden;
-            border: 1px solid var(--border-light);
-        }
-        
-        .experiment-header {
+        .comparison-side {
+            background: var(--neutral-bg);
             padding: 20px;
-            border-bottom: 1px solid var(--border-light);
+            border-radius: 8px;
+            border: 2px solid var(--border-light);
         }
         
-        .experiment-header.before {
-            background: linear-gradient(135deg, #feb2b2 0%, #fed7d7 100%);
-            color: #742a2a;
+        .comparison-side.before {
+            border-left: 4px solid var(--error-red);
         }
         
-        .experiment-header.after {
-            background: linear-gradient(135deg, #9ae6b4 0%, #c6f6d5 100%);
-            color: #22543d;
+        .comparison-side.after {
+            border-left: 4px solid var(--success-green);
         }
         
-        .experiment-header h3 {
-            margin: 0 0 8px 0;
-            font-size: 1.25rem;
+        .comparison-arrow {
+            font-size: 2rem;
+            color: var(--primary-blue);
+            font-weight: bold;
+        }
+        
+        .side-title {
             font-weight: 600;
+            font-size: 1.1rem;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
-        .experiment-content {
+        .side-title.before { color: var(--error-red); }
+        .side-title.after { color: var(--success-green); }
+        
+        /* Attack Analysis */
+        .attack-analysis {
+            display: grid;
+            gap: 20px;
+        }
+        
+        .attack-vector {
+            background: white;
+            border: 1px solid var(--border-light);
+            border-radius: 8px;
             padding: 20px;
-            max-height: 280px;
-            overflow-y: auto;
-            font-size: 0.8rem;
-            line-height: 1.5;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
         }
         
-        .experiment-content p {
-            margin: 8px 0;
-            word-wrap: break-word;
+        .attack-vector h4 {
+            margin: 0 0 15px 0;
+            color: var(--primary-navy);
+            font-size: 1.2rem;
         }
         
-        .experiment-content h4 {
-            color: var(--accent-blue);
-            margin: 12px 0 8px 0;
+        .status-comparison {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin: 15px 0;
+        }
+        
+        .status-before, .status-after {
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: 600;
             font-size: 0.9rem;
-            border-bottom: 1px solid var(--border-light);
-            padding-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
-        .experiment-content h5 {
-            color: var(--text-dark);
-            margin: 10px 0 6px 0;
-            font-size: 0.85rem;
+        .status-VULNERABLE { 
+            background: var(--vulnerable-bg); 
+            color: var(--error-red);
+            border: 1px solid #fed7d7;
         }
         
-        .experiment-content hr {
-            border: none;
-            border-top: 1px solid var(--border-light);
-            margin: 12px 0;
+        .status-SECURE { 
+            background: var(--secure-bg); 
+            color: var(--success-green);
+            border: 1px solid #c6f6d5;
         }
         
-        .experiment-content strong {
-            color: var(--primary-dark);
-        }
-        
-        .verdict-section {
-            background: white;
-            border-radius: 12px;
-            box-shadow: var(--shadow);
-            overflow: hidden;
+        .status-UNTESTED { 
+            background: var(--neutral-bg); 
+            color: var(--text-light);
             border: 1px solid var(--border-light);
         }
         
-        .verdict-header {
-            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-teal) 100%);
-            color: white;
-            padding: 20px;
-        }
-        
-        .verdict-header h2 {
-            margin: 0;
-            font-size: 1.5rem;
+        .status-unavailable {
+            background: #fef5e7;
+            color: var(--warning-orange);
+            padding: 8px 16px;
+            border-radius: 4px;
             font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
-        .verdict-content {
+        .status-arrow {
+            font-size: 1.5rem;
+            color: var(--primary-blue);
+            font-weight: bold;
+        }
+        
+        .improvement-status {
+            margin-top: 10px;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .improvement-status.improved {
+            background: var(--secure-bg);
+            color: var(--success-green);
+        }
+        
+        .improvement-status.maintained {
+            background: #e6fffa;
+            color: #2c7a7b;
+        }
+        
+        .improvement-status.failed {
+            background: var(--vulnerable-bg);
+            color: var(--error-red);
+        }
+        
+        .improvement-status.unknown {
+            background: var(--neutral-bg);
+            color: var(--text-light);
+        }
+        
+        .technical-details {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: var(--text-light);
+            font-family: 'Courier New', monospace;
+        }
+        
+        /* CVSS Analysis */
+        .cvss-analysis {
+            background: var(--neutral-bg);
             padding: 20px;
+            border-radius: 8px;
         }
         
-        .metrics-grid {
+        .cvss-summary {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 12px;
-            margin: 20px 0;
+            gap: 20px;
+            margin-bottom: 20px;
         }
         
-        .metric-card {
-            background: var(--primary-light);
-            padding: 16px;
+        .cvss-metric {
+            background: white;
+            padding: 20px;
             border-radius: 8px;
             text-align: center;
             border: 1px solid var(--border-light);
+        }
+        
+        .metric-label {
+            font-size: 0.9rem;
+            color: var(--text-light);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         
         .metric-value {
             font-size: 2rem;
             font-weight: 700;
-            margin: 8px 0;
+            color: var(--primary-navy);
         }
         
-        .metric-label {
-            font-size: 0.875rem;
-            color: var(--text-light);
-            font-weight: 500;
+        .severity-High { color: var(--error-red); }
+        .severity-Medium { color: var(--warning-orange); }
+        .severity-Low { color: var(--success-green); }
+        .severity-None { color: var(--text-light); }
+        
+        .vulnerability-list {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid var(--warning-orange);
         }
         
-        .metric-change {
-            font-size: 0.875rem;
-            margin-top: 4px;
-            font-weight: 600;
+        .vulnerability-list h4 {
+            margin: 0 0 10px 0;
+            color: var(--primary-navy);
         }
         
-        .change-positive { color: var(--success-green); }
-        .change-negative { color: var(--error-red); }
-        .change-neutral { color: var(--text-light); }
+        .vulnerability-list ul {
+            margin: 0;
+            padding-left: 20px;
+        }
         
-        .status-badge {
-            display: inline-flex;
+        /* Hardening Analysis */
+        .hardening-analysis {
+            background: var(--neutral-bg);
+            padding: 20px;
+            border-radius: 8px;
+        }
+        
+        .hardening-measure {
+            display: flex;
+            justify-content: space-between;
             align-items: center;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 0.875rem;
+            background: white;
+            padding: 15px 20px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border: 1px solid var(--border-light);
+        }
+        
+        .measure-name {
             font-weight: 600;
-            margin: 8px 0;
+            color: var(--primary-navy);
         }
         
-        .status-success {
-            background: #f0fff4;
+        .measure-status {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .measure-status.improved {
+            background: var(--secure-bg);
             color: var(--success-green);
-            border: 1px solid #9ae6b4;
         }
         
-        .status-warning {
-            background: #fffaf0;
-            color: var(--warning-orange);
-            border: 1px solid #fbd38d;
+        .measure-status.maintained {
+            background: #e6fffa;
+            color: #2c7a7b;
         }
         
-        .status-error {
-            background: #fff5f5;
+        .measure-status.failed {
+            background: var(--vulnerable-bg);
             color: var(--error-red);
-            border: 1px solid #feb2b2;
         }
         
-        .analysis-table {
+        .measure-status.unknown {
+            background: var(--neutral-bg);
+            color: var(--text-light);
+        }
+        
+        .effectiveness-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .effectiveness-metric {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid var(--border-light);
+        }
+        
+        .overall-assessment {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .overall-assessment.excellent {
+            background: var(--secure-bg);
+            color: var(--success-green);
+            border: 2px solid #9ae6b4;
+        }
+        
+        .overall-assessment.good {
+            background: #e6fffa;
+            color: #2c7a7b;
+            border: 2px solid #81e6d9;
+        }
+        
+        .overall-assessment.satisfactory {
+            background: #fef5e7;
+            color: var(--warning-orange);
+            border: 2px solid #fbd38d;
+        }
+        
+        .overall-assessment.baseline {
+            background: var(--neutral-bg);
+            color: var(--text-dark);
+            border: 2px solid var(--border-light);
+        }
+        
+        .overall-assessment.insufficient {
+            background: var(--vulnerable-bg);
+            color: var(--error-red);
+            border: 2px solid #fed7d7;
+        }
+        
+        /* Metrics Table */
+        .metrics-table {
             width: 100%;
             border-collapse: collapse;
-            margin: 16px 0;
+            margin: 20px 0;
             background: white;
             border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            font-size: 0.875rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
         
-        .analysis-table th {
-            background: var(--primary-dark);
+        .metrics-table th {
+            background: var(--primary-navy);
             color: white;
-            padding: 12px;
+            padding: 15px;
             text-align: left;
             font-weight: 600;
-            font-size: 0.75rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.5px;
+            font-size: 0.9rem;
         }
         
-        .analysis-table td {
-            padding: 12px;
+        .metrics-table td {
+            padding: 15px;
             border-bottom: 1px solid var(--border-light);
         }
         
-        .analysis-table tr:last-child td {
+        .metrics-table tr:last-child td {
             border-bottom: none;
         }
         
-        .analysis-table tr:nth-child(even) {
-            background: var(--primary-light);
+        .metrics-table tr:nth-child(even) {
+            background: var(--background-gray);
         }
         
-        .score-display {
+        .change-positive { color: var(--success-green); font-weight: 600; }
+        .change-negative { color: var(--error-red); font-weight: 600; }
+        .change-neutral { color: var(--text-light); }
+        
+        /* Score Display */
+        .security-score {
             text-align: center;
-            padding: 20px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            background: linear-gradient(135deg, var(--primary-navy) 0%, var(--primary-blue) 100%);
             color: white;
-            border-radius: 12px;
-            margin: 12px 0;
+            margin: 20px 0;
         }
         
         .score-value {
-            font-size: 3rem;
-            font-weight: 700;
+            font-size: 4rem;
+            font-weight: 300;
             margin: 0;
         }
         
         .score-label {
-            font-size: 1.25rem;
+            font-size: 1.2rem;
             opacity: 0.9;
-            margin: 8px 0 0 0;
+            margin: 10px 0 0 0;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
         
-        pre {
-            background: var(--primary-dark);
-            color: #e2e8f0;
-            padding: 12px;
-            border-radius: 6px;
-            overflow-x: auto;
-            font-size: 0.7rem;
-            line-height: 1.3;
-            border: 1px solid #4a5568;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            max-height: 200px;
+        /* Analysis Content */
+        .analysis-content {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            line-height: 1.4;
+            max-height: 300px;
             overflow-y: auto;
-            margin: 8px 0;
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid var(--border-light);
         }
         
-        pre.json {
-            background: #2d3748;
-            color: #fbb6ce;
-            border-color: #4a5568;
-        }
-        
+        /* Collapsible Sections */
         .collapsible {
-            background: var(--primary-light);
+            background: white;
             border: 1px solid var(--border-light);
             border-radius: 8px;
-            margin: 16px 0;
+            margin: 20px 0;
         }
         
         .collapsible-header {
-            padding: 16px 20px;
+            padding: 20px;
             cursor: pointer;
             user-select: none;
             font-weight: 600;
-            background: white;
-            border-radius: 8px 8px 0 0;
+            background: var(--background-gray);
             border-bottom: 1px solid var(--border-light);
+            color: var(--primary-navy);
         }
         
         .collapsible-header:hover {
-            background: var(--primary-light);
+            background: #edf2f7;
         }
         
         .collapsible-content {
@@ -1089,108 +1162,37 @@ cat > "$REPORT_FILE" <<EOF
             display: block;
         }
         
+        pre {
+            background: var(--primary-navy);
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 0.8rem;
+            line-height: 1.4;
+            margin: 10px 0;
+        }
+        
         .footer {
             text-align: center;
-            padding: 24px;
+            padding: 30px;
             color: var(--text-light);
-            font-size: 0.875rem;
-        }
-        
-        code {
-            background: var(--border-light);
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-            font-size: 0.875rem;
-        }
-        
-        /* 실험 결과 스타일 추가 */
-        .attack-result {
-            margin: 8px 0;
-            padding: 8px 12px;
-            background: var(--primary-light);
-            border-radius: 6px;
-            border-left: 4px solid var(--accent-blue);
-            font-size: 0.875rem;
-        }
-        
-        .cvss-scores {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 12px;
-            margin: 12px 0;
-        }
-        
-        .cvss-score {
-            background: var(--primary-light);
-            padding: 8px;
-            border-radius: 6px;
-            text-align: center;
-            font-size: 0.875rem;
-        }
-        
-        .cvss-severity {
-            grid-column: 1 / -1;
-            text-align: center;
-            font-size: 1.1rem;
-            margin-top: 8px;
-        }
-        
-        .hardening-measures {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 8px;
-            margin: 12px 0;
-        }
-        
-        .measure {
-            background: var(--primary-light);
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 0.875rem;
-        }
-        
-        .hardening-status {
-            margin: 16px 0;
-            padding: 12px;
-            border-radius: 8px;
-            text-align: center;
-            font-weight: bold;
-        }
-        
-        .hardening-status.success {
-            background: #f0fff4;
-            color: var(--success-green);
-            border: 1px solid #9ae6b4;
-        }
-        
-        .hardening-status.partial {
-            background: #fffaf0;
-            color: var(--warning-orange);
-            border: 1px solid #fbd38d;
-        }
-        
-        .hardening-status.warning {
-            background: #fff5f5;
-            color: var(--error-red);
-            border: 1px solid #feb2b2;
+            font-size: 0.9rem;
+            background: var(--background-gray);
         }
         
         @media (max-width: 768px) {
-            .experiment-grid {
+            .comparison-chart {
                 grid-template-columns: 1fr;
             }
             
-            .metrics-grid {
+            .comparison-arrow {
+                display: none;
+            }
+            
+            .cvss-summary,
+            .effectiveness-summary {
                 grid-template-columns: 1fr 1fr;
-            }
-            
-            .header h1 {
-                font-size: 2rem;
-            }
-            
-            .score-value {
-                font-size: 3rem;
             }
         }
     </style>
@@ -1207,266 +1209,178 @@ cat > "$REPORT_FILE" <<EOF
 </head>
 <body>
     <div class="container">
-        <!-- Header Section -->
+        <!-- Header -->
         <div class="header">
-            <h1>SMTP/DNS 취약점 분석 보고서</h1>
+            <h1>Security Assessment Report</h1>
             <div class="subtitle">
-                실행 ID: <strong>$RUN_ID</strong> | 
-                생성 시간: <strong>$GENERATED_AT</strong>
+                Experiment ID: <strong>$RUN_ID</strong> | 
+                Generated: <strong>$GENERATED_AT</strong>
             </div>
         </div>
 
-        <!-- 실험 결과 요약 섹션 -->
-        <div class="experiment-summary">
-            <div class="experiment-summary-header">
-                <h2>Security Assessment Results</h2>
-            </div>
-            <div class="experiment-summary-content">
-                <div class="artifact-grid">
-                    <div class="artifact-card">
-                        $ATTACK_RESULTS_HTML
-                    </div>
-                    <div class="artifact-card">
-                        $CVSS_SCORES_HTML
-                    </div>
-                </div>
-                <div class="artifact-card" style="margin-top: 16px;">
-                    $HARDENING_EFFECTIVENESS_HTML
-                </div>
-            </div>
-        </div>
-
-        <!-- Security Score Display -->
-        <div class="score-display">
-            <div class="score-value">$security_score</div>
-            <div class="score-label">종합 보안 점수 / 100</div>
-        </div>
-
-        <!-- Main Verdict -->
-        <div class="verdict-section">
-            <div class="verdict-header">
-                <h2>보안 강화 효과 분석</h2>
-            </div>
-            <div class="verdict-content">
-                $VERDICT
-                
-                <!-- Key Metrics Grid -->
-                <div class="metrics-grid">
-                    <div class="metric-card">
-                        <div class="metric-label">총 패킷 수</div>
-                        <div class="metric-value">$before_packets → $after_packets</div>
-                        <div class="metric-change $([ $packet_diff -gt 0 ] && echo 'change-positive' || [ $packet_diff -lt 0 ] && echo 'change-negative' || echo 'change-neutral')">
-                            $(if [ $packet_diff -gt 0 ]; then echo "-$packet_diff 패킷 (감소)"; elif [ $packet_diff -lt 0 ]; then echo "+$((-packet_diff)) 패킷 (증가)"; else echo '변화 없음'; fi)
-                        </div>
-                    </div>
-                    
-                    <div class="metric-card">
-                        <div class="metric-label">SMTP 명령 수</div>
-                        <div class="metric-value">$BEFORE_SMTP_CMDS_COUNT → $AFTER_SMTP_CMDS_COUNT</div>
-                        <div class="metric-change $([ $cmd_decrease -gt 0 ] && echo 'change-positive' || [ $cmd_decrease -lt 0 ] && echo 'change-negative' || echo 'change-neutral')">
-                            $([ $cmd_decrease -eq 0 ] && echo '변화 없음' || [ $cmd_decrease -gt 0 ] && echo "-$cmd_decrease 명령" || echo "+$((AFTER_SMTP_CMDS_COUNT - BEFORE_SMTP_CMDS_COUNT)) 명령")
-                        </div>
-                    </div>
-                    
-                    <div class="metric-card">
-                        <div class="metric-label">거부 응답 (5xx)</div>
-                        <div class="metric-value">$BEFORE_REJECT_COUNT → $AFTER_REJECT_COUNT</div>
-                        <div class="metric-change $([ $reject_increase -gt 0 ] && echo 'change-positive' || [ $reject_increase -lt 0 ] && echo 'change-negative' || echo 'change-neutral')">
-                            $([ $reject_increase -eq 0 ] && echo '변화 없음' || [ $reject_increase -gt 0 ] && echo "+$reject_increase 거부" || echo "$reject_increase 거부")
-                        </div>
-                    </div>
-                    
-                    <div class="metric-card">
-                        <div class="metric-label">DATA 명령 차단</div>
-                        <div class="metric-value">$BEFORE_DATA_ATTEMPTS → $AFTER_DATA_ATTEMPTS</div>
-                        <div class="metric-change $([ $data_cmd_decrease -gt 0 ] && echo 'change-positive' || [ $data_cmd_decrease -lt 0 ] && echo 'change-negative' || echo 'change-neutral')">
-                            $([ $data_cmd_decrease -eq 0 ] && echo '변화 없음' || [ $data_cmd_decrease -gt 0 ] && echo "-$data_cmd_decrease 차단" || echo "+$((AFTER_DATA_ATTEMPTS - BEFORE_DATA_ATTEMPTS)) 시도")
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Status Badge -->
-                <div class="$([ $security_score -ge 70 ] && echo 'status-success' || [ $security_score -ge 40 ] && echo 'status-success' || [ $security_score -ge 20 ] && echo 'status-warning' || echo 'status-error') status-badge">
-                    $([ $security_score -ge 70 ] && echo '🛡️ 강력한 보안 강화' || [ $security_score -ge 40 ] && echo '✅ 보안 강화 성공' || [ $security_score -ge 20 ] && echo '⚠️ 부분적 개선' || echo '❌ 강화 실패')
-                </div>
-            </div>
-        </div>
-
-        <!-- Traffic Analysis -->
-        <div class="verdict-section">
-            <div class="verdict-header">
-                <h2>트래픽 패턴 분석</h2>
-            </div>
-            <div class="verdict-content">
-                $PACKET_VERDICT
-            </div>
-        </div>
-
-        <!-- Experiment Results Grid -->
-        <div class="experiment-grid">
-            <div class="experiment-card">
-                <div class="experiment-header before">
-                    <h3>강화 전 실험 결과</h3>
-                    <code>$BEFORE_ANALYSIS_FILE</code>
-                </div>
-                <div class="experiment-content">
-                    $BEFORE_CONTENT_HTML
-                </div>
+        <!-- Executive Summary -->
+        <div class="content-section">
+            <h2 class="section-title">Executive Summary</h2>
+            
+            <div class="security-score">
+                <div class="score-value">$security_score</div>
+                <div class="score-label">Security Score / 100</div>
             </div>
             
-            <div class="experiment-card">
-                <div class="experiment-header after">
-                    <h3>강화 후 실험 결과</h3>
-                    <code>$AFTER_ANALYSIS_FILE</code>
-                </div>
-                <div class="experiment-content">
-                    $AFTER_CONTENT_HTML
-                </div>
-            </div>
-        </div>
-
-        <!-- Detailed Analysis Table -->
-        <div class="verdict-section">
-            <div class="verdict-header">
-                <h2>상세 분석 지표</h2>
-            </div>
-            <div class="verdict-content">
-                <table class="analysis-table">
-                    <thead>
-                        <tr>
-                            <th>지표</th>
-                            <th>강화 전</th>
-                            <th>강화 후</th>
-                            <th>변화</th>
-                            <th>보안 영향</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><strong>총 패킷 수</strong></td>
-                            <td>$before_packets</td>
-                            <td>$after_packets</td>
-                            <td style="color: $([ $packet_diff -gt 0 ] && echo 'var(--success-green)' || [ $packet_diff -lt 0 ] && echo 'var(--error-red)' || echo 'var(--text-light)');">
-                                $(if [ $packet_diff -gt 0 ]; then echo "-$packet_diff"; elif [ $packet_diff -lt 0 ]; then echo "+$((-packet_diff))"; else echo "0"; fi)
-                            </td>
-                            <td>네트워크 효율성</td>
-                        </tr>
-                        <tr>
-                            <td><strong>SMTP 명령 수</strong></td>
-                            <td>$BEFORE_SMTP_CMDS_COUNT</td>
-                            <td>$AFTER_SMTP_CMDS_COUNT</td>
-                            <td style="color: $([ $cmd_decrease -gt 0 ] && echo 'var(--success-green)' || echo 'var(--text-light)');">
-                                $([ $cmd_decrease -gt 0 ] && echo "-$cmd_decrease" || echo "$(( AFTER_SMTP_CMDS_COUNT - BEFORE_SMTP_CMDS_COUNT ))")
-                            </td>
-                            <td>공격 벡터 감소</td>
-                        </tr>
-                        <tr>
-                            <td><strong>DATA 명령 시도</strong></td>
-                            <td>$BEFORE_DATA_ATTEMPTS</td>
-                            <td>$AFTER_DATA_ATTEMPTS</td>
-                            <td style="color: $([ $data_cmd_decrease -gt 0 ] && echo 'var(--success-green)' || echo 'var(--text-light)');">
-                                $([ $data_cmd_decrease -gt 0 ] && echo "-$data_cmd_decrease" || echo "$(( AFTER_DATA_ATTEMPTS - BEFORE_DATA_ATTEMPTS ))")
-                            </td>
-                            <td>메일 전송 차단</td>
-                        </tr>
-                        <tr>
-                            <td><strong>5xx 거부 응답</strong></td>
-                            <td>$BEFORE_REJECT_COUNT</td>
-                            <td>$AFTER_REJECT_COUNT</td>
-                            <td style="color: $([ $reject_increase -gt 0 ] && echo 'var(--success-green)' || echo 'var(--text-light)');">
-                                $([ $reject_increase -gt 0 ] && echo "+$reject_increase" || echo "$reject_increase")
-                            </td>
-                            <td>액세스 제어 강화</td>
-                        </tr>
-                        <tr>
-                            <td><strong>인증 실패</strong></td>
-                            <td>$BEFORE_AUTH_FAILURES</td>
-                            <td>$AFTER_AUTH_FAILURES</td>
-                            <td style="color: $([ $auth_failure_increase -gt 0 ] && echo 'var(--success-green)' || echo 'var(--text-light)');">
-                                $([ $auth_failure_increase -gt 0 ] && echo "+$auth_failure_increase" || echo "$auth_failure_increase")
-                            </td>
-                            <td>인증 보안 강화</td>
-                        </tr>
-                        <tr style="background: var(--primary-light); font-weight: bold;">
-                            <td><strong>종합 보안 점수</strong></td>
-                            <td colspan="3" style="text-align: center;">$security_score / 100</td>
-                            <td>$([ $security_score -ge 70 ] && echo '강력함' || [ $security_score -ge 40 ] && echo '양호' || [ $security_score -ge 20 ] && echo '보통' || echo '취약')</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Collapsible Sections -->
-        <div class="collapsible">
-            <div class="collapsible-header">
-                Experiment Details & Files
-            </div>
-            <div class="collapsible-content">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-                    <div>
-                        <h4>Environment</h4>
-                        <div style="font-size: 0.875rem;">
-                            $ENVIRONMENT_INFO_HTML
-                        </div>
+            <div class="comparison-chart">
+                <div class="comparison-side before">
+                    <div class="side-title before">Before Hardening</div>
+                    <div class="analysis-content">
+                        $BEFORE_CONTENT_HTML
                     </div>
-                    <div>
-                        <h4>Files</h4>
-                        <div style="font-size: 0.875rem;">
-                            $EXPERIMENT_ARTIFACTS_HTML
-                        </div>
+                </div>
+                
+                <div class="comparison-arrow">→</div>
+                
+                <div class="comparison-side after">
+                    <div class="side-title after">After Hardening</div>
+                    <div class="analysis-content">
+                        $AFTER_CONTENT_HTML
                     </div>
                 </div>
             </div>
         </div>
 
+        <!-- Attack Vector Analysis -->
+        <div class="content-section">
+            <h2 class="section-title">Attack Vector Analysis</h2>
+            $ATTACK_RESULTS_HTML
+        </div>
+
+        <!-- Risk Assessment -->
+        <div class="content-section">
+            <h2 class="section-title">Risk Assessment</h2>
+            $CVSS_SCORES_HTML
+        </div>
+
+        <!-- Security Hardening Assessment -->
+        <div class="content-section">
+            <h2 class="section-title">Security Hardening Assessment</h2>
+            $HARDENING_EFFECTIVENESS_HTML
+        </div>
+
+        <!-- Detailed Metrics -->
+        <div class="content-section">
+            <h2 class="section-title">Detailed Security Metrics</h2>
+            
+            <table class="metrics-table">
+                <thead>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Before</th>
+                        <th>After</th>
+                        <th>Change</th>
+                        <th>Security Impact</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Total Packets</strong></td>
+                        <td>$before_packets</td>
+                        <td>$after_packets</td>
+                        <td class="$([ $packet_diff -gt 0 ] && echo 'change-positive' || [ $packet_diff -lt 0 ] && echo 'change-negative' || echo 'change-neutral')">
+                            $(if [ $packet_diff -gt 0 ]; then echo "-$packet_diff"; elif [ $packet_diff -lt 0 ]; then echo "+$((-packet_diff))"; else echo "0"; fi)
+                        </td>
+                        <td>Network Efficiency</td>
+                    </tr>
+                    <tr>
+                        <td><strong>SMTP Commands</strong></td>
+                        <td>$BEFORE_SMTP_CMDS_COUNT</td>
+                        <td>$AFTER_SMTP_CMDS_COUNT</td>
+                        <td class="$([ $cmd_decrease -gt 0 ] && echo 'change-positive' || echo 'change-neutral')">
+                            $([ $cmd_decrease -gt 0 ] && echo "-$cmd_decrease" || echo "$(( AFTER_SMTP_CMDS_COUNT - BEFORE_SMTP_CMDS_COUNT ))")
+                        </td>
+                        <td>Attack Vector Reduction</td>
+                    </tr>
+                    <tr>
+                        <td><strong>5xx Rejections</strong></td>
+                        <td>$BEFORE_REJECT_COUNT</td>
+                        <td>$AFTER_REJECT_COUNT</td>
+                        <td class="$([ $reject_increase -gt 0 ] && echo 'change-positive' || echo 'change-neutral')">
+                            $([ $reject_increase -gt 0 ] && echo "+$reject_increase" || echo "$reject_increase")
+                        </td>
+                        <td>Access Control Enforcement</td>
+                    </tr>
+                    <tr>
+                        <td><strong>DATA Commands</strong></td>
+                        <td>$BEFORE_DATA_ATTEMPTS</td>
+                        <td>$AFTER_DATA_ATTEMPTS</td>
+                        <td class="$([ $data_cmd_decrease -gt 0 ] && echo 'change-positive' || echo 'change-neutral')">
+                            $([ $data_cmd_decrease -gt 0 ] && echo "-$data_cmd_decrease" || echo "$(( AFTER_DATA_ATTEMPTS - BEFORE_DATA_ATTEMPTS ))")
+                        </td>
+                        <td>Mail Relay Prevention</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Technical Details -->
         <div class="collapsible">
             <div class="collapsible-header">
-                Before/After Analysis Comparison (Diff)
+                Technical Implementation Details
             </div>
             <div class="collapsible-content">
-                <p>다음은 강화 전후 분석 파일 간의 차이점입니다.</p>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px;">
+                    <div>
+                        <h4>Environment Information</h4>
+                        $ENVIRONMENT_INFO_HTML
+                    </div>
+                    <div>
+                        <h4>Generated Artifacts</h4>
+                        $EXPERIMENT_ARTIFACTS_HTML
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="collapsible">
+            <div class="collapsible-header">
+                Configuration Diff Analysis
+            </div>
+            <div class="collapsible-content">
+                <p>Detailed comparison between pre-hardening and post-hardening configurations:</p>
                 $DIFF_CONTENT_HTML
             </div>
         </div>
 
         <div class="collapsible">
             <div class="collapsible-header">
-                Analysis Criteria & Interpretation Guide
+                Assessment Methodology
             </div>
             <div class="collapsible-content">
-                <h4>보안 점수 기준</h4>
+                <h4>Security Score Calculation</h4>
                 <ul>
-                    <li><strong>강력한 보안 강화 (70점+):</strong> 다층적 보안 개선 - 거부 응답 증가 + DATA 명령 차단 + 인증 강화</li>
-                    <li><strong>보안 강화 성공 (40-69점):</strong> 핵심 보안 지표 개선 - 5xx 거부 응답 증가 또는 DATA 명령 차단</li>
-                    <li><strong>부분적 개선 (20-39점):</strong> 일부 보안 요소 개선되나 추가 조치 필요</li>
-                    <li><strong>강화 실패 (0-19점)::</strong> 거부 응답 증가 없이 공격 명령 여전히 실행 가능</li>
+                    <li><strong>70-100 Points:</strong> Comprehensive security hardening with multiple layers of protection</li>
+                    <li><strong>40-69 Points:</strong> Significant security improvements with key vulnerabilities addressed</li>
+                    <li><strong>20-39 Points:</strong> Partial security enhancements requiring additional measures</li>
+                    <li><strong>0-19 Points:</strong> Minimal security improvement with ongoing vulnerabilities</li>
                 </ul>
                 
-                <h4>트래픽 분석 기준</h4>
+                <h4>Analysis Criteria</h4>
                 <ul>
-                    <li><strong>패킷 수 기준:</strong> SMTP 특성상 1-3개 차이는 정상 (TCP 핸드셰이크/세션 종료 차이)</li>
-                    <li><strong>핵심 지표:</strong> SMTP 응답 코드 변화가 패킷 수보다 중요한 보안 지표</li>
-                    <li><strong>동적 임계값:</strong> 패킷 수에 따라 유의미한 변화 기준을 조정</li>
+                    <li><strong>Attack Vector Mitigation:</strong> Reduction in successful attack attempts</li>
+                    <li><strong>Response Code Analysis:</strong> Increase in security-positive 5xx responses</li>
+                    <li><strong>Protocol Compliance:</strong> Enforcement of secure communication standards</li>
+                    <li><strong>Configuration Hardening:</strong> Implementation of security best practices</li>
                 </ul>
-                
-                <p><small><strong>참고:</strong> 이 판단은 SMTP 패킷 캡처 및 응답 코드 분석에 기반합니다. 실제 보안 설정은 추가적인 검토가 필요할 수 있습니다.</small></p>
             </div>
         </div>
 
         <div class="footer">
-            <p>🔬 SMTP/DNS Vulnerability Lab Report Generator | 
-            자동화된 보안 분석 도구로 생성됨 | 
-            <strong>핵심 보안 분석 리포트</strong></p>
+            <p>Security Assessment Report | Generated by SMTP/DNS Vulnerability Assessment Lab<br>
+            <strong>Professional Security Analysis Framework</strong></p>
         </div>
     </div>
 </body>
 </html>
 EOF
 
-echo "INFO: HTML 보고서 생성 완료: $REPORT_FILE"
-echo "INFO: 공격 스크립트 실행 결과, CVSS 점수, 하드닝 효과가 포함된 통합 보고서"
-# 운영체제에 따라 자동으로 브라우저에서 열기 (선택 사항)
-xdg-open "$REPORT_FILE" 2>/dev/null || open "$REPORT_FILE" 2>/dev/null || echo "INFO: 브라우저에서 $REPORT_FILE 파일을 수동으로 열어주세요."
+echo "INFO: Professional security assessment report generated: $REPORT_FILE"
+xdg-open "$REPORT_FILE" 2>/dev/null || open "$REPORT_FILE" 2>/dev/null || echo "INFO: Open $REPORT_FILE in your browser"
 
 exit 0
