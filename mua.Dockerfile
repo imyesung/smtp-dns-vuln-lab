@@ -3,12 +3,19 @@ FROM debian:bullseye-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    iputils-ping \
-    netcat \
     swaks \
+    telnet \
+    openssl \
+    dnsutils \
+    netcat-openbsd \
     curl \
+    python3 \
+    python3-pip \
     bash \
-    && apt-get clean
+    vim \
+    iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /scripts
+
 ENTRYPOINT ["/bin/bash"]

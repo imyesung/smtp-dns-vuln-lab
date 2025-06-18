@@ -24,6 +24,43 @@ TEST_DOMAINS=(
 
 echo "INFO: Starting SPF/DKIM/DMARC analysis - ID: $ATTACK_ID"
 
+# DNS 도구 확인
+if command -v dig >/dev/null 2>&1; then
+    DNS_TOOL="dig"
+elif command -v nslookup >/dev/null 2>&1; then
+    DNS_TOOL="nslookup"
+elif command -v host >/dev/null 2>&1; then
+    DNS_TOOL="host"
+else
+    echo "WARNING: No DNS query tools available - skipping DNS record checks"
+    DNS_TOOL="none"
+fi
+
+echo "INFO: Using $DNS_TOOL for DNS queries"
+
+# DNS 쿼리 함수
+query_txt_record() {
+    local domain="$1"
+    local server="$2"
+    
+    if [[ "$DNS_TOOL" == "none" ]]; then
+        echo "DNS_TOOL_NOT_AVAILABLE"
+        return
+    fi
+    
+    case "$DNS_TOOL" in
+        "dig")
+            timeout 10 dig @$server $domain TXT +short 2>/dev/null || echo "QUERY_FAILED"
+            ;;
+        "nslookup")
+            timeout 10 nslookup -type=TXT $domain $server 2>/dev/null | grep "text =" | sed 's/.*text = //' | tr -d '"' || echo "QUERY_FAILED"
+            ;;
+        "host")
+            timeout 10 host -t TXT $domain $server 2>/dev/null | grep "descriptive text" | sed 's/.*descriptive text "//' | sed 's/"$//' || echo "QUERY_FAILED"
+            ;;
+    esac
+}
+
 # 1. 메일 헤더 분석 (파일이 제공된 경우)
 if [[ -n "$EMAIL_FILE" && -f "$EMAIL_FILE" ]]; then
     echo "INFO: Analyzing email headers from file: $EMAIL_FILE"
@@ -66,6 +103,7 @@ DNS_RECORDS_FILE="$ARTIFACTS_DIR/dns_auth_records_$ATTACK_ID.txt"
 {
     echo "===== DNS Authentication Records Check ====="
     echo "Timestamp: $(date)"
+    echo "DNS Tool: $DNS_TOOL"
     echo "Testing domains for SPF, DKIM, and DMARC records..."
     echo ""
 } > $DNS_RECORDS_FILE
@@ -75,75 +113,99 @@ DMARC_MISSING_COUNT=0
 WEAK_SPF_COUNT=0
 WEAK_DMARC_COUNT=0
 
-for domain in "${TEST_DOMAINS[@]}"; do
-    echo "=== Testing domain: $domain ===" >> $DNS_RECORDS_FILE
-    
-    # SPF 레코드 확인
-    echo "Checking SPF record for $domain..." >> $DNS_RECORDS_FILE
-    if timeout 10 dig @$DNS_IP $domain TXT +short | grep -i "v=spf1" >> $DNS_RECORDS_FILE 2>&1; then
-        SPF_RECORD=$(timeout 10 dig @$DNS_IP $domain TXT +short | grep -i "v=spf1" | head -1)
-        echo "FOUND SPF: $SPF_RECORD" >> $DNS_RECORDS_FILE
+if [[ "$DNS_TOOL" != "none" ]]; then
+    for domain in "${TEST_DOMAINS[@]}"; do
+        echo "=== Testing domain: $domain ===" >> $DNS_RECORDS_FILE
         
-        # SPF 정책 강도 확인
-        if echo "$SPF_RECORD" | grep -q "~all"; then
-            echo "WEAK SPF: Uses ~all (soft fail)" >> $DNS_RECORDS_FILE
-            WEAK_SPF_COUNT=$((WEAK_SPF_COUNT + 1))
-        elif echo "$SPF_RECORD" | grep -q "?all"; then
-            echo "WEAK SPF: Uses ?all (neutral)" >> $DNS_RECORDS_FILE
-            WEAK_SPF_COUNT=$((WEAK_SPF_COUNT + 1))
-        elif echo "$SPF_RECORD" | grep -q "+all"; then
-            echo "VULNERABLE SPF: Uses +all (pass all)" >> $DNS_RECORDS_FILE
-            WEAK_SPF_COUNT=$((WEAK_SPF_COUNT + 1))
-        elif echo "$SPF_RECORD" | grep -q "\-all"; then
-            echo "STRONG SPF: Uses -all (hard fail)" >> $DNS_RECORDS_FILE
-        fi
-    else
-        echo "NO SPF: No SPF record found for $domain" >> $DNS_RECORDS_FILE
-        SPF_MISSING_COUNT=$((SPF_MISSING_COUNT + 1))
-    fi
-    
-    # DMARC 레코드 확인
-    echo "Checking DMARC record for $domain..." >> $DNS_RECORDS_FILE
-    DMARC_DOMAIN="_dmarc.$domain"
-    if timeout 10 dig @$DNS_IP $DMARC_DOMAIN TXT +short | grep -i "v=DMARC1" >> $DNS_RECORDS_FILE 2>&1; then
-        DMARC_RECORD=$(timeout 10 dig @$DNS_IP $DMARC_DOMAIN TXT +short | grep -i "v=DMARC1" | head -1)
-        echo "FOUND DMARC: $DMARC_RECORD" >> $DNS_RECORDS_FILE
+        # SPF 레코드 확인
+        echo "Checking SPF record for $domain..." >> $DNS_RECORDS_FILE
+        SPF_RESULT=$(query_txt_record "$domain" "$DNS_IP")
         
-        # DMARC 정책 강도 확인
-        if echo "$DMARC_RECORD" | grep -q "p=none"; then
-            echo "WEAK DMARC: Policy set to 'none'" >> $DNS_RECORDS_FILE
-            WEAK_DMARC_COUNT=$((WEAK_DMARC_COUNT + 1))
-        elif echo "$DMARC_RECORD" | grep -q "p=quarantine"; then
-            echo "MODERATE DMARC: Policy set to 'quarantine'" >> $DNS_RECORDS_FILE
-        elif echo "$DMARC_RECORD" | grep -q "p=reject"; then
-            echo "STRONG DMARC: Policy set to 'reject'" >> $DNS_RECORDS_FILE
+        if [[ "$SPF_RESULT" != "QUERY_FAILED" && "$SPF_RESULT" != "DNS_TOOL_NOT_AVAILABLE" ]]; then
+            SPF_RECORD=$(echo "$SPF_RESULT" | grep -i "v=spf1" | head -1)
+            if [[ -n "$SPF_RECORD" ]]; then
+                echo "FOUND SPF: $SPF_RECORD" >> $DNS_RECORDS_FILE
+                
+                # SPF 정책 강도 확인
+                if echo "$SPF_RECORD" | grep -q "~all"; then
+                    echo "WEAK SPF: Uses ~all (soft fail)" >> $DNS_RECORDS_FILE
+                    WEAK_SPF_COUNT=$((WEAK_SPF_COUNT + 1))
+                elif echo "$SPF_RECORD" | grep -q "?all"; then
+                    echo "WEAK SPF: Uses ?all (neutral)" >> $DNS_RECORDS_FILE
+                    WEAK_SPF_COUNT=$((WEAK_SPF_COUNT + 1))
+                elif echo "$SPF_RECORD" | grep -q "+all"; then
+                    echo "VULNERABLE SPF: Uses +all (pass all)" >> $DNS_RECORDS_FILE
+                    WEAK_SPF_COUNT=$((WEAK_SPF_COUNT + 1))
+                elif echo "$SPF_RECORD" | grep -q "\-all"; then
+                    echo "STRONG SPF: Uses -all (hard fail)" >> $DNS_RECORDS_FILE
+                fi
+            else
+                echo "NO SPF: No SPF record found for $domain" >> $DNS_RECORDS_FILE
+                SPF_MISSING_COUNT=$((SPF_MISSING_COUNT + 1))
+            fi
+        else
+            echo "ERROR: SPF query failed for $domain" >> $DNS_RECORDS_FILE
+            SPF_MISSING_COUNT=$((SPF_MISSING_COUNT + 1))
         fi
-    else
-        echo "NO DMARC: No DMARC record found for $domain" >> $DNS_RECORDS_FILE
-        DMARC_MISSING_COUNT=$((DMARC_MISSING_COUNT + 1))
-    fi
-    
-    # DKIM 레코드 확인 (일반적인 셀렉터들 시도)
-    echo "Checking DKIM records for $domain..." >> $DNS_RECORDS_FILE
-    DKIM_SELECTORS=("default" "selector1" "selector2" "google" "mail" "smtp" "k1")
-    DKIM_FOUND=false
-    
-    for selector in "${DKIM_SELECTORS[@]}"; do
-        DKIM_DOMAIN="${selector}._domainkey.$domain"
-        if timeout 10 dig @$DNS_IP $DKIM_DOMAIN TXT +short | grep -q "v=DKIM1\|k="; then
-            DKIM_RECORD=$(timeout 10 dig @$DNS_IP $DKIM_DOMAIN TXT +short | head -1)
-            echo "FOUND DKIM ($selector): $DKIM_RECORD" >> $DNS_RECORDS_FILE
-            DKIM_FOUND=true
-            break
+        
+        # DMARC 레코드 확인
+        echo "Checking DMARC record for $domain..." >> $DNS_RECORDS_FILE
+        DMARC_DOMAIN="_dmarc.$domain"
+        DMARC_RESULT=$(query_txt_record "$DMARC_DOMAIN" "$DNS_IP")
+        
+        if [[ "$DMARC_RESULT" != "QUERY_FAILED" && "$DMARC_RESULT" != "DNS_TOOL_NOT_AVAILABLE" ]]; then
+            DMARC_RECORD=$(echo "$DMARC_RESULT" | grep -i "v=DMARC1" | head -1)
+            if [[ -n "$DMARC_RECORD" ]]; then
+                echo "FOUND DMARC: $DMARC_RECORD" >> $DNS_RECORDS_FILE
+                
+                # DMARC 정책 강도 확인
+                if echo "$DMARC_RECORD" | grep -q "p=none"; then
+                    echo "WEAK DMARC: Policy set to 'none'" >> $DNS_RECORDS_FILE
+                    WEAK_DMARC_COUNT=$((WEAK_DMARC_COUNT + 1))
+                elif echo "$DMARC_RECORD" | grep -q "p=quarantine"; then
+                    echo "MODERATE DMARC: Policy set to 'quarantine'" >> $DNS_RECORDS_FILE
+                elif echo "$DMARC_RECORD" | grep -q "p=reject"; then
+                    echo "STRONG DMARC: Policy set to 'reject'" >> $DNS_RECORDS_FILE
+                fi
+            else
+                echo "NO DMARC: No DMARC record found for $domain" >> $DNS_RECORDS_FILE
+                DMARC_MISSING_COUNT=$((DMARC_MISSING_COUNT + 1))
+            fi
+        else
+            echo "ERROR: DMARC query failed for $domain" >> $DNS_RECORDS_FILE
+            DMARC_MISSING_COUNT=$((DMARC_MISSING_COUNT + 1))
         fi
+        
+        # DKIM 레코드 확인 (일반적인 셀렉터들 시도)
+        echo "Checking DKIM records for $domain..." >> $DNS_RECORDS_FILE
+        DKIM_SELECTORS=("default" "selector1" "selector2" "google" "mail" "smtp" "k1")
+        DKIM_FOUND=false
+        
+        for selector in "${DKIM_SELECTORS[@]}"; do
+            DKIM_DOMAIN="${selector}._domainkey.$domain"
+            DKIM_RESULT=$(query_txt_record "$DKIM_DOMAIN" "$DNS_IP")
+            
+            if [[ "$DKIM_RESULT" != "QUERY_FAILED" && "$DKIM_RESULT" != "DNS_TOOL_NOT_AVAILABLE" ]]; then
+                if echo "$DKIM_RESULT" | grep -q "v=DKIM1\|k="; then
+                    echo "FOUND DKIM ($selector): $DKIM_RESULT" >> $DNS_RECORDS_FILE
+                    DKIM_FOUND=true
+                    break
+                fi
+            fi
+        done
+        
+        if [ "$DKIM_FOUND" = false ]; then
+            echo "NO DKIM: No DKIM records found for common selectors" >> $DNS_RECORDS_FILE
+        fi
+        
+        echo "---" >> $DNS_RECORDS_FILE
     done
-    
-    if [ "$DKIM_FOUND" = false ]; then
-        echo "NO DKIM: No DKIM records found for common selectors" >> $DNS_RECORDS_FILE
-    fi
-    
-    echo "---" >> $DNS_RECORDS_FILE
-done
+else
+    echo "DNS tool not available - skipping DNS record checks" >> $DNS_RECORDS_FILE
+    echo "All domains will be counted as missing SPF/DMARC records" >> $DNS_RECORDS_FILE
+    SPF_MISSING_COUNT=${#TEST_DOMAINS[@]}
+    DMARC_MISSING_COUNT=${#TEST_DOMAINS[@]}
+fi
 
 # 3. 실제 스푸핑 테스트 생성
 echo "INFO: Generating spoofing test scenarios..."
